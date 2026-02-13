@@ -241,4 +241,4 @@ async def on_ready():
     print(f'📝 Commands: /shuffle, /draw, /spread, /deck_info')
 
 # Run the bot
-client.run('MTQ3MTg4MTc5NjMwNzEyODM5NA.GoiTTF.n6H5UFHlFHFIw5M0ro3dJHx8ocf8guNOMCfYdA')
+client.run('MTQ3MTg5NzkxMzg1OTg5OTQ3NA.Gr32pp.5zXd6AcvLqd1701_Y6b9BanBO6b8-t5V9f4eHI')
