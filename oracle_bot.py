@@ -45,7 +45,7 @@ CARDS = {
     "The Star": "Hope, faith, purpose, renewal, spirituality",
     "The Moon": "Illusion, fear, anxiety, subconscious, intuition",
     "The Sun": "Positivity, fun, warmth, success, vitality",
-    "Judgement": "Reflection, reckoning, inner calling, absolution",
+    "Judgment": "Reflection, reckoning, inner calling, absolution",
     "The World": "Completion, accomplishment, travel, fulfillment",
 }
 
