@@ -19,8 +19,8 @@ def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
     filename = card_name.lower().replace(" ", "-").replace("•", "").strip()
-    # Add .jpg extension (change to .png if you're using PNG files)
-    filename = f"{filename}.jpg"
+    # Add .png extension (change to .png if you're using PNG files)
+    filename = f"{filename}.png"
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{filename}"
 
 # Card deck - using a mix of playing cards and basic tarot for demo
@@ -159,7 +159,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     )
     
     # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
     embed.set_thumbnail(url=card_back_url)
     
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
@@ -210,7 +210,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     )
     
     # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
     embed.set_thumbnail(url=card_back_url)
     
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
