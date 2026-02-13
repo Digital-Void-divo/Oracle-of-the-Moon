@@ -30,6 +30,44 @@ def get_card_back_url():
     """Get the card back image URL"""
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
 
+# Image cache to avoid re-downloading
+image_cache = {}
+
+def download_card_image(url):
+    """Download and cache a card image"""
+    if url in image_cache:
+        print(f"Using cached image for {url}")
+        return image_cache[url]
+    
+    try:
+        response = requests.get(url, timeout=10)
+        print(f"Downloaded {url}: status={response.status_code}, content-type={response.headers.get('content-type')}, size={len(response.content)}")
+        
+        if response.status_code == 200:
+            content_type = response.headers.get('content-type', '')
+            if 'image' not in content_type:
+                print(f"Warning: Content-Type is {content_type}, not an image!")
+                print(f"First 100 bytes: {response.content[:100]}")
+                return None
+            
+            img = Image.open(io.BytesIO(response.content))
+            img.load()  # Force load to validate
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            
+            # Cache the image
+            image_cache[url] = img.copy()
+            print(f"Cached image: {url}, size: {img.size}")
+            return img
+        else:
+            print(f"Failed to download: status {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Error downloading {url}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def create_composite_image(cards, revealed_indices):
     """Create a composite image showing cards side by side"""
     try:
@@ -41,41 +79,17 @@ def create_composite_image(cards, revealed_indices):
         # Download and process each card
         for i, card_name in enumerate(cards):
             if i in revealed_indices:
-                # Show the actual card
                 url = get_card_image_url(card_name)
-                print(f"Card {i} ({card_name}): Fetching face from {url}")
+                print(f"Card {i} ({card_name}): Getting face from {url}")
             else:
-                # Show card back
                 url = card_back_url
-                print(f"Card {i}: Fetching card back from {url}")
+                print(f"Card {i}: Getting card back")
             
-            response = requests.get(url, timeout=10)
-            print(f"Response status for card {i}: {response.status_code}")
-            print(f"Content-Type: {response.headers.get('content-type')}")
-            print(f"Content length: {len(response.content)} bytes")
-            
-            if response.status_code == 200:
-                # Verify it's actually an image
-                content_type = response.headers.get('content-type', '')
-                if 'image' not in content_type:
-                    print(f"Warning: Content-Type is {content_type}, not an image!")
-                
-                try:
-                    img = Image.open(io.BytesIO(response.content))
-                    # Force load the image to validate it
-                    img.load()
-                    # Convert to RGBA to ensure compatibility
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    card_images.append(img)
-                    print(f"Successfully loaded image {i}, size: {img.size}, mode: {img.mode}")
-                except Exception as img_error:
-                    print(f"Failed to parse image {i}: {img_error}")
-                    # Save problematic content for debugging
-                    print(f"First 100 bytes: {response.content[:100]}")
-                    return None
+            img = download_card_image(url)
+            if img:
+                card_images.append(img.copy())
             else:
-                print(f"Failed to load image {i} - status {response.status_code}")
+                print(f"Failed to get image for card {i}")
                 return None
         
         if not card_images:
@@ -83,7 +97,6 @@ def create_composite_image(cards, revealed_indices):
             return None
         
         # Calculate dimensions for composite
-        # Assume all cards are the same size
         card_width, card_height = card_images[0].size
         spacing = 20  # pixels between cards
         total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
@@ -97,7 +110,6 @@ def create_composite_image(cards, revealed_indices):
         # Paste each card
         x_offset = 0
         for idx, img in enumerate(card_images):
-            print(f"Pasting card {idx} at x={x_offset}")
             composite.paste(img, (x_offset, 0))
             x_offset += card_width + spacing
         
