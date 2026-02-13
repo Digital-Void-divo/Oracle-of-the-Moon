@@ -154,6 +154,9 @@ class CardRevealView(View):
                         item.style = discord.ButtonStyle.success
                         item.disabled = True
                 
+                # Defer the response since we need time to generate image
+                await interaction.response.defer()
+                
                 # Create new composite image with this card revealed
                 composite_bytes = create_composite_image(self.cards, self.revealed)
                 
@@ -179,9 +182,10 @@ class CardRevealView(View):
                     embed.set_image(url="attachment://cards.png")
                     embed.set_footer(text=f"{len(self.revealed)}/{len(self.cards)} cards revealed")
                     
-                    await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+                    # Edit the original message
+                    await interaction.message.edit(embed=embed, view=self, attachments=[file])
                 else:
-                    await interaction.response.send_message("Failed to load card image!", ephemeral=True)
+                    await interaction.followup.send("Failed to load card image!", ephemeral=True)
             else:
                 await interaction.response.send_message("This card has already been revealed! ✨", ephemeral=True)
         
