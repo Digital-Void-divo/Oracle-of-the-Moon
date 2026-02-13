@@ -3,6 +3,9 @@ from discord import app_commands
 from discord.ui import Button, View
 import random
 import os
+import io
+from PIL import Image
+import requests
 
 # Bot setup
 intents = discord.Intents.default()
@@ -22,6 +25,62 @@ def get_card_image_url(card_name):
     # Add .png extension
     filename = f"{filename}.png"
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{filename}"
+
+def get_card_back_url():
+    """Get the card back image URL"""
+    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
+
+def create_composite_image(cards, revealed_indices):
+    """Create a composite image showing cards side by side"""
+    try:
+        card_images = []
+        card_back_url = get_card_back_url()
+        
+        # Download and process each card
+        for i, card_name in enumerate(cards):
+            if i in revealed_indices:
+                # Show the actual card
+                url = get_card_image_url(card_name)
+            else:
+                # Show card back
+                url = card_back_url
+            
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                img = Image.open(io.BytesIO(response.content))
+                card_images.append(img)
+            else:
+                # If image fails to load, create a placeholder
+                return None
+        
+        if not card_images:
+            return None
+        
+        # Calculate dimensions for composite
+        # Assume all cards are the same size
+        card_width, card_height = card_images[0].size
+        spacing = 20  # pixels between cards
+        total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
+        total_height = card_height
+        
+        # Create composite image
+        composite = Image.new('RGBA', (total_width, total_height), (0, 0, 0, 0))
+        
+        # Paste each card
+        x_offset = 0
+        for img in card_images:
+            composite.paste(img, (x_offset, 0))
+            x_offset += card_width + spacing
+        
+        # Convert to bytes for Discord
+        img_bytes = io.BytesIO()
+        composite.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return img_bytes
+    except Exception as e:
+        print(f"Error creating composite image: {e}")
+        return None
 
 # Card deck - using a mix of playing cards and basic tarot for demo
 CARDS = {
@@ -65,11 +124,13 @@ def shuffle_deck(guild_id):
     random.shuffle(deck_state[guild_id])
 
 class CardRevealView(View):
-    def __init__(self, cards, positions=None):
+    def __init__(self, cards, positions, interaction):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cards = cards  # List of card names
-        self.revealed = [False] * len(cards)
+        self.revealed = set()  # Set of revealed indices
         self.positions = positions or [f"Card {i+1}" for i in range(len(cards))]
+        self.interaction = interaction
+        self.message = None
         
         # Create a button for each card
         for i in range(len(cards)):
@@ -83,8 +144,8 @@ class CardRevealView(View):
     
     def make_callback(self, index):
         async def callback(interaction: discord.Interaction):
-            if not self.revealed[index]:
-                self.revealed[index] = True
+            if index not in self.revealed:
+                self.revealed.add(index)
                 
                 # Update button to show it's revealed
                 for item in self.children:
@@ -93,24 +154,34 @@ class CardRevealView(View):
                         item.style = discord.ButtonStyle.success
                         item.disabled = True
                 
-                # Create embed for revealed card
-                card_name = self.cards[index]
-                card_meaning = CARDS[card_name]
+                # Create new composite image with this card revealed
+                composite_bytes = create_composite_image(self.cards, self.revealed)
                 
-                embed = discord.Embed(
-                    title=f"🔮 {card_name}",
-                    description=card_meaning,
-                    color=discord.Color.purple()
-                )
-                
-                # Add card image if available
-                image_url = get_card_image_url(card_name)
-                embed.set_image(url=image_url)
-                
-                embed.set_footer(text=self.positions[index])
-                
-                await interaction.response.edit_message(view=self)
-                await interaction.followup.send(embed=embed, ephemeral=False)
+                if composite_bytes:
+                    file = discord.File(composite_bytes, filename="cards.png")
+                    
+                    # Build description showing revealed card info
+                    card_name = self.cards[index]
+                    card_meaning = CARDS[card_name]
+                    
+                    # Create list of revealed cards
+                    revealed_info = []
+                    for i in sorted(self.revealed):
+                        revealed_info.append(f"**{self.positions[i]}:** {self.cards[i]}\n*{CARDS[self.cards[i]]}*")
+                    
+                    description = "\n\n".join(revealed_info) if revealed_info else "Click a card to reveal!"
+                    
+                    embed = discord.Embed(
+                        title=f"🔮 Card Reading",
+                        description=description,
+                        color=discord.Color.purple()
+                    )
+                    embed.set_image(url="attachment://cards.png")
+                    embed.set_footer(text=f"{len(self.revealed)}/{len(self.cards)} cards revealed")
+                    
+                    await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+                else:
+                    await interaction.response.send_message("Failed to load card image!", ephemeral=True)
             else:
                 await interaction.response.send_message("This card has already been revealed! ✨", ephemeral=True)
         
@@ -149,22 +220,29 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     # Draw cards
     drawn_cards = [deck.pop(0) for _ in range(count)]
     
-    # Create view with flip buttons
-    view = CardRevealView(drawn_cards)
+    # Defer response since image generation might take a moment
+    await interaction.response.defer()
     
-    embed = discord.Embed(
-        title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
-        description=f"Click the buttons below to reveal each card one at a time! ✨{reshuffle_msg}",
-        color=discord.Color.blue()
-    )
+    # Create initial composite with all cards face down
+    composite_bytes = create_composite_image(drawn_cards, set())
     
-    # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
-    embed.set_thumbnail(url=card_back_url)
-    
-    embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
-    
-    await interaction.response.send_message(embed=embed, view=view)
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with flip buttons
+        view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction)
+        
+        embed = discord.Embed(
+            title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
+            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}",
+            color=discord.Color.blue()
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
 @tree.command(name="spread", description="Perform a card spread reading")
 @app_commands.describe(spread_type="Type of spread to perform")
@@ -198,24 +276,31 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     # Draw cards for spread
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     
-    # Create view with labeled buttons
-    view = CardRevealView(drawn_cards, positions)
+    # Defer response since image generation might take a moment
+    await interaction.response.defer()
     
-    spread_title = spread_type.replace("_", " • ").title()
+    # Create initial composite with all cards face down
+    composite_bytes = create_composite_image(drawn_cards, set())
     
-    embed = discord.Embed(
-        title=f"🔮 {spread_title} Spread",
-        description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}",
-        color=discord.Color.purple()
-    )
-    
-    # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
-    embed.set_thumbnail(url=card_back_url)
-    
-    embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
-    
-    await interaction.response.send_message(embed=embed, view=view)
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with labeled buttons
+        view = CardRevealView(drawn_cards, positions, interaction)
+        
+        spread_title = spread_type.replace("_", " • ").title()
+        
+        embed = discord.Embed(
+            title=f"🔮 {spread_title} Spread",
+            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}",
+            color=discord.Color.purple()
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
 @tree.command(name="deck_info", description="See information about the current deck")
 async def deck_info(interaction: discord.Interaction):
