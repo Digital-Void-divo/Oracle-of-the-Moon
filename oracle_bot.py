@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ui import Button, View
 import random
+import os
 
 # Bot setup
 intents = discord.Intents.default()
@@ -19,8 +20,8 @@ def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
     filename = card_name.lower().replace(" ", "-").replace("•", "").strip()
-    # Add .png extension (change to .png if you're using PNG files)
-    filename = f"{filename}.png"
+    # Add .jpg extension (change to .png if you're using PNG files)
+    filename = f"{filename}.jpg"
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{filename}"
 
 # Card deck - using a mix of playing cards and basic tarot for demo
@@ -45,7 +46,7 @@ CARDS = {
     "The Star": "Hope, faith, purpose, renewal, spirituality",
     "The Moon": "Illusion, fear, anxiety, subconscious, intuition",
     "The Sun": "Positivity, fun, warmth, success, vitality",
-    "Judgment": "Reflection, reckoning, inner calling, absolution",
+    "Judgement": "Reflection, reckoning, inner calling, absolution",
     "The World": "Completion, accomplishment, travel, fulfillment",
 }
 
@@ -159,7 +160,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     )
     
     # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
     embed.set_thumbnail(url=card_back_url)
     
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
@@ -210,7 +211,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     )
     
     # Add card back image
-    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
     embed.set_thumbnail(url=card_back_url)
     
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
@@ -241,4 +242,4 @@ async def on_ready():
     print(f'📝 Commands: /shuffle, /draw, /spread, /deck_info')
 
 # Run the bot
-client.run('MTQ3MTg5NzkxMzg1OTg5OTQ3NA.Gr32pp.5zXd6AcvLqd1701_Y6b9BanBO6b8-t5V9f4eHI')
+client.run(os.getenv('DISCORD_TOKEN'))
