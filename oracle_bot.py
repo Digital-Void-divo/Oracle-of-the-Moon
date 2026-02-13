@@ -157,6 +157,11 @@ async def draw(interaction: discord.Interaction, count: int = 1):
         description=f"Click the buttons below to reveal each card one at a time! ✨{reshuffle_msg}",
         color=discord.Color.blue()
     )
+    
+    # Add card back image
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
+    embed.set_thumbnail(url=card_back_url)
+    
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
     
     await interaction.response.send_message(embed=embed, view=view)
@@ -203,6 +208,11 @@ async def spread(interaction: discord.Interaction, spread_type: str):
         description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}",
         color=discord.Color.purple()
     )
+    
+    # Add card back image
+    card_back_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.jpg"
+    embed.set_thumbnail(url=card_back_url)
+    
     embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
     
     await interaction.response.send_message(embed=embed, view=view)
