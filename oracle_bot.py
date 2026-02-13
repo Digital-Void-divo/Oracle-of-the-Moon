@@ -36,24 +36,50 @@ def create_composite_image(cards, revealed_indices):
         card_images = []
         card_back_url = get_card_back_url()
         
+        print(f"Creating composite for {len(cards)} cards, revealed: {revealed_indices}")
+        
         # Download and process each card
         for i, card_name in enumerate(cards):
             if i in revealed_indices:
                 # Show the actual card
                 url = get_card_image_url(card_name)
+                print(f"Card {i} ({card_name}): Fetching face from {url}")
             else:
                 # Show card back
                 url = card_back_url
+                print(f"Card {i}: Fetching card back from {url}")
             
             response = requests.get(url, timeout=10)
+            print(f"Response status for card {i}: {response.status_code}")
+            print(f"Content-Type: {response.headers.get('content-type')}")
+            print(f"Content length: {len(response.content)} bytes")
+            
             if response.status_code == 200:
-                img = Image.open(io.BytesIO(response.content))
-                card_images.append(img)
+                # Verify it's actually an image
+                content_type = response.headers.get('content-type', '')
+                if 'image' not in content_type:
+                    print(f"Warning: Content-Type is {content_type}, not an image!")
+                
+                try:
+                    img = Image.open(io.BytesIO(response.content))
+                    # Force load the image to validate it
+                    img.load()
+                    # Convert to RGBA to ensure compatibility
+                    if img.mode != 'RGBA':
+                        img = img.convert('RGBA')
+                    card_images.append(img)
+                    print(f"Successfully loaded image {i}, size: {img.size}, mode: {img.mode}")
+                except Exception as img_error:
+                    print(f"Failed to parse image {i}: {img_error}")
+                    # Save problematic content for debugging
+                    print(f"First 100 bytes: {response.content[:100]}")
+                    return None
             else:
-                # If image fails to load, create a placeholder
+                print(f"Failed to load image {i} - status {response.status_code}")
                 return None
         
         if not card_images:
+            print("No card images loaded!")
             return None
         
         # Calculate dimensions for composite
@@ -63,12 +89,15 @@ def create_composite_image(cards, revealed_indices):
         total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
         total_height = card_height
         
+        print(f"Creating composite: {total_width}x{total_height}")
+        
         # Create composite image
         composite = Image.new('RGBA', (total_width, total_height), (0, 0, 0, 0))
         
         # Paste each card
         x_offset = 0
-        for img in card_images:
+        for idx, img in enumerate(card_images):
+            print(f"Pasting card {idx} at x={x_offset}")
             composite.paste(img, (x_offset, 0))
             x_offset += card_width + spacing
         
@@ -77,9 +106,12 @@ def create_composite_image(cards, revealed_indices):
         composite.save(img_bytes, format='PNG')
         img_bytes.seek(0)
         
+        print(f"Composite created successfully! Size: {img_bytes.getbuffer().nbytes} bytes")
         return img_bytes
     except Exception as e:
         print(f"Error creating composite image: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # Card deck - using a mix of playing cards and basic tarot for demo
