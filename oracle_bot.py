@@ -10,17 +10,16 @@ client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # GitHub repo settings for card images
-# Update these with your repo details!
-GITHUB_USERNAME = "yourusername"  # Change this to your GitHub username
-GITHUB_REPO = "yourrepo"  # Change this to your repo name
-GITHUB_BRANCH = "main"  # Usually 'main' or 'master'
-IMAGE_FOLDER = "card_images"  # Folder in your repo where images are stored
+GITHUB_USERNAME = "Digital-Void-divo"
+GITHUB_REPO = "Oracle-of-the-Moon"
+GITHUB_BRANCH = "main"
+IMAGE_FOLDER = "card_images"
 
 def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
     filename = card_name.lower().replace(" ", "-").replace("•", "").strip()
-    # Add .png extension (change to .png if you're using PNG files)
+    # Add .png extension
     filename = f"{filename}.png"
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{filename}"
 
