@@ -168,9 +168,10 @@ def shuffle_deck(guild_id):
     random.shuffle(deck_state[guild_id])
 
 class CardRevealView(View):
-    def __init__(self, cards, positions, interaction):
+    def __init__(self, cards, positions, interaction, reversed_cards):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cards = cards  # List of card names
+        self.reversed_cards = reversed_cards  # List of bools indicating if card is reversed
         self.revealed = set()  # Set of revealed indices
         self.positions = positions or [f"Card {i+1}" for i in range(len(cards))]
         self.interaction = interaction
@@ -198,38 +199,33 @@ class CardRevealView(View):
                         item.style = discord.ButtonStyle.success
                         item.disabled = True
                 
-                # Defer the response since we need time to generate image
-                await interaction.response.defer()
+                # Just show the revealed card in a new message
+                card_name = self.cards[index]
+                is_reversed = self.reversed_cards[index]
+                card_meaning = CARDS[card_name]
                 
-                # Create new composite image with this card revealed
-                composite_bytes = create_composite_image(self.cards, self.revealed)
+                # Get the card face image
+                card_url = get_card_image_url(card_name)
                 
-                if composite_bytes:
-                    file = discord.File(composite_bytes, filename="cards.png")
-                    
-                    # Build description showing revealed card info
-                    card_name = self.cards[index]
-                    card_meaning = CARDS[card_name]
-                    
-                    # Create list of revealed cards
-                    revealed_info = []
-                    for i in sorted(self.revealed):
-                        revealed_info.append(f"**{self.positions[i]}:** {self.cards[i]}\n*{CARDS[self.cards[i]]}*")
-                    
-                    description = "\n\n".join(revealed_info) if revealed_info else "Click a card to reveal!"
-                    
-                    embed = discord.Embed(
-                        title=f"🔮 Card Reading",
-                        description=description,
-                        color=discord.Color.purple()
-                    )
-                    embed.set_image(url="attachment://cards.png")
-                    embed.set_footer(text=f"{len(self.revealed)}/{len(self.cards)} cards revealed")
-                    
-                    # Edit the original message
-                    await interaction.message.edit(embed=embed, view=self, attachments=[file])
-                else:
-                    await interaction.followup.send("Failed to load card image!", ephemeral=True)
+                # Add reversed indicator
+                title = f"🔮 {self.positions[index]}: {card_name}"
+                if is_reversed:
+                    title += " (Reversed)"
+                    # Add reversed meaning context
+                    card_meaning = f"🔄 **Reversed**\n\n{card_meaning}\n\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form. Consider the opposite or inverse of the upright meaning.*"
+                
+                embed = discord.Embed(
+                    title=title,
+                    description=card_meaning,
+                    color=discord.Color.purple() if not is_reversed else discord.Color.blue()
+                )
+                embed.set_image(url=card_url)
+                
+                # Update the view on the original message
+                await interaction.message.edit(view=self)
+                
+                # Send the revealed card as a new message
+                await interaction.response.send_message(embed=embed)
             else:
                 await interaction.response.send_message("This card has already been revealed! ✨", ephemeral=True)
         
@@ -268,6 +264,9 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     # Draw cards
     drawn_cards = [deck.pop(0) for _ in range(count)]
     
+    # Randomly determine which cards are reversed (50% chance each)
+    reversed_cards = [random.choice([True, False]) for _ in range(count)]
+    
     # Defer response since image generation might take a moment
     await interaction.response.defer()
     
@@ -278,7 +277,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
         file = discord.File(composite_bytes, filename="cards.png")
         
         # Create view with flip buttons
-        view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction)
+        view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction, reversed_cards)
         
         embed = discord.Embed(
             title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
@@ -324,6 +323,9 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     # Draw cards for spread
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     
+    # Randomly determine which cards are reversed (50% chance each)
+    reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
+    
     # Defer response since image generation might take a moment
     await interaction.response.defer()
     
@@ -334,7 +336,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
         file = discord.File(composite_bytes, filename="cards.png")
         
         # Create view with labeled buttons
-        view = CardRevealView(drawn_cards, positions, interaction)
+        view = CardRevealView(drawn_cards, positions, interaction, reversed_cards)
         
         spread_title = spread_type.replace("_", " • ").title()
         
