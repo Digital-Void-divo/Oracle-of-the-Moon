@@ -33,11 +33,13 @@ def get_card_back_url():
 # Image cache to avoid re-downloading
 image_cache = {}
 
-def download_card_image(url):
+def download_card_image(url, rotate=False):
     """Download and cache a card image"""
-    if url in image_cache:
-        print(f"Using cached image for {url}")
-        return image_cache[url]
+    cache_key = f"{url}_rotated" if rotate else url
+    
+    if cache_key in image_cache:
+        print(f"Using cached image for {cache_key}")
+        return image_cache[cache_key]
     
     try:
         response = requests.get(url, timeout=10)
@@ -55,9 +57,13 @@ def download_card_image(url):
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
             
+            # Rotate 180 degrees if reversed
+            if rotate:
+                img = img.rotate(180, expand=True)
+            
             # Cache the image
-            image_cache[url] = img.copy()
-            print(f"Cached image: {url}, size: {img.size}")
+            image_cache[cache_key] = img.copy()
+            print(f"Cached image: {cache_key}, size: {img.size}")
             return img
         else:
             print(f"Failed to download: status {response.status_code}")
@@ -68,7 +74,7 @@ def download_card_image(url):
         traceback.print_exc()
         return None
 
-def create_composite_image(cards, revealed_indices):
+def create_composite_image(cards, revealed_indices, reversed_cards):
     """Create a composite image showing cards side by side"""
     try:
         card_images = []
@@ -80,12 +86,14 @@ def create_composite_image(cards, revealed_indices):
         for i, card_name in enumerate(cards):
             if i in revealed_indices:
                 url = get_card_image_url(card_name)
-                print(f"Card {i} ({card_name}): Getting face from {url}")
+                is_reversed = reversed_cards[i]
+                print(f"Card {i} ({card_name}): Getting face from {url}, reversed={is_reversed}")
+                img = download_card_image(url, rotate=is_reversed)
             else:
                 url = card_back_url
                 print(f"Card {i}: Getting card back")
+                img = download_card_image(url, rotate=False)
             
-            img = download_card_image(url)
             if img:
                 card_images.append(img.copy())
             else:
@@ -199,33 +207,45 @@ class CardRevealView(View):
                         item.style = discord.ButtonStyle.success
                         item.disabled = True
                 
-                # Just show the revealed card in a new message
-                card_name = self.cards[index]
-                is_reversed = self.reversed_cards[index]
-                card_meaning = CARDS[card_name]
+                # Defer the response since we need time to generate image
+                await interaction.response.defer()
                 
-                # Get the card face image
-                card_url = get_card_image_url(card_name)
+                # Create new composite image with this card revealed
+                composite_bytes = create_composite_image(self.cards, self.revealed, self.reversed_cards)
                 
-                # Add reversed indicator
-                title = f"🔮 {self.positions[index]}: {card_name}"
-                if is_reversed:
-                    title += " (Reversed)"
-                    # Add reversed meaning context
-                    card_meaning = f"🔄 **Reversed**\n\n{card_meaning}\n\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form. Consider the opposite or inverse of the upright meaning.*"
-                
-                embed = discord.Embed(
-                    title=title,
-                    description=card_meaning,
-                    color=discord.Color.purple() if not is_reversed else discord.Color.blue()
-                )
-                embed.set_image(url=card_url)
-                
-                # Update the view on the original message
-                await interaction.message.edit(view=self)
-                
-                # Send the revealed card as a new message
-                await interaction.response.send_message(embed=embed)
+                if composite_bytes:
+                    file = discord.File(composite_bytes, filename="cards.png")
+                    
+                    # Build description showing revealed card info
+                    card_name = self.cards[index]
+                    is_reversed = self.reversed_cards[index]
+                    card_meaning = CARDS[card_name]
+                    
+                    # Create list of revealed cards
+                    revealed_info = []
+                    for i in sorted(self.revealed):
+                        title = f"**{self.positions[i]}:** {self.cards[i]}"
+                        if self.reversed_cards[i]:
+                            title += " (Reversed)"
+                        meaning = CARDS[self.cards[i]]
+                        if self.reversed_cards[i]:
+                            meaning = f"🔄 {meaning}\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form.*"
+                        revealed_info.append(f"{title}\n*{meaning}*")
+                    
+                    description = "\n\n".join(revealed_info) if revealed_info else "Click a card to reveal!"
+                    
+                    embed = discord.Embed(
+                        title=f"🔮 Card Reading",
+                        description=description,
+                        color=discord.Color.purple()
+                    )
+                    embed.set_image(url="attachment://cards.png")
+                    embed.set_footer(text=f"{len(self.revealed)}/{len(self.cards)} cards revealed")
+                    
+                    # Edit the original message
+                    await interaction.message.edit(embed=embed, view=self, attachments=[file])
+                else:
+                    await interaction.followup.send("Failed to load card image!", ephemeral=True)
             else:
                 await interaction.response.send_message("This card has already been revealed! ✨", ephemeral=True)
         
@@ -271,7 +291,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     await interaction.response.defer()
     
     # Create initial composite with all cards face down
-    composite_bytes = create_composite_image(drawn_cards, set())
+    composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
@@ -330,7 +350,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     await interaction.response.defer()
     
     # Create initial composite with all cards face down
-    composite_bytes = create_composite_image(drawn_cards, set())
+    composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
