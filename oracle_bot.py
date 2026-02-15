@@ -1431,8 +1431,6 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
 @tree.command(name="request_reading", description="Request a reading from the reader")
 @app_commands.describe(topic="Optional: What you'd like guidance on")
 async def request_reading(interaction: discord.Interaction, topic: str = None):
-    # Get the reader (Wasteland Oracle role)
-    
     guild = interaction.guild
     if not guild:
         await interaction.response.send_message(
@@ -1447,11 +1445,14 @@ async def request_reading(interaction: discord.Interaction, topic: str = None):
     if reader_role:
         readers = [member for member in guild.members if reader_role in member.roles]
         if readers:
+            # Mention actual users
             reader_mentions = " ".join([reader.mention for reader in readers])
         else:
-            reader_mentions = "@Wasteland Oracle"
+            # Mention the role itself if no members have it yet
+            reader_mentions = reader_role.mention
     else:
-        reader_mentions = "@Wasteland Oracle"
+        # Role doesn't exist, just use text
+        reader_mentions = "**Wasteland Oracle**"
     
     # Create request message
     topic_text = f"\n**Topic:** {topic}" if topic else ""
@@ -1463,7 +1464,11 @@ async def request_reading(interaction: discord.Interaction, topic: str = None):
     )
     embed.set_footer(text=f"Requested by {interaction.user.display_name}")
     
-    await interaction.response.send_message(embed=embed)
+    # Need to send with allowed_mentions to actually ping the role
+    await interaction.response.send_message(
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(roles=True, users=True)
+    )
 
 @tree.command(name="reading_stats", description="View statistics about your readings")
 async def reading_stats_command(interaction: discord.Interaction):
