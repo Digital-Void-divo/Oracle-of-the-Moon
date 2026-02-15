@@ -641,6 +641,33 @@ async def undo(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="undo_and_shuffle", description="Undo the last draw, return cards, and shuffle the remaining deck")
+async def undo_and_shuffle(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or interaction.user.id
+    
+    if not can_undo(guild_id):
+        await interaction.response.send_message(
+            "❌ No recent draw to undo! You can only undo the most recent draw.",
+            ephemeral=True
+        )
+        return
+    
+    cards = undo_draw(guild_id)
+    card_list = ", ".join(cards)
+    
+    # Shuffle the deck (which now includes the returned cards)
+    deck = get_deck(guild_id)
+    random.shuffle(deck)
+    
+    embed = discord.Embed(
+        title="↩️🔀 Undone & Shuffled",
+        description=f"Returned {len(cards)} card{'s' if len(cards) > 1 else ''} to the deck:\n*{card_list}*\n\nThe entire deck has been shuffled! ✨",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text=f"{len(deck)} cards in deck")
+    
+    await interaction.response.send_message(embed=embed)
+
 @tree.command(name="pull_clarifier", description="Draw an additional card to clarify a previous reading")
 async def pull_clarifier(interaction: discord.Interaction):
     guild_id = interaction.guild_id or interaction.user.id
@@ -695,7 +722,7 @@ async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /deck_info, /card_info')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
