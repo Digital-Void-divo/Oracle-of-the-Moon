@@ -84,6 +84,67 @@ def save_journals_to_github(journals, sha=None):
 # Store last reading per user for journaling
 last_readings = {}
 
+class JournalPaginationView(View):
+    def __init__(self, entries, user_id, page=0, per_page=10):
+        super().__init__(timeout=180)
+        self.entries = entries
+        self.user_id = user_id
+        self.page = page
+        self.per_page = per_page
+        self.max_page = (len(entries) - 1) // per_page
+        
+        # Add previous button
+        prev_button = Button(label="◀ Previous", style=discord.ButtonStyle.primary, disabled=(page == 0))
+        prev_button.callback = self.previous_page
+        self.add_item(prev_button)
+        
+        # Add next button
+        next_button = Button(label="Next ▶", style=discord.ButtonStyle.primary, disabled=(page >= self.max_page))
+        next_button.callback = self.next_page
+        self.add_item(next_button)
+    
+    async def previous_page(self, interaction: discord.Interaction):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("This isn't your journal!", ephemeral=True)
+            return
+        
+        self.page -= 1
+        await self.update_message(interaction)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user.id != int(self.user_id):
+            await interaction.response.send_message("This isn't your journal!", ephemeral=True)
+            return
+        
+        self.page += 1
+        await self.update_message(interaction)
+    
+    async def update_message(self, interaction: discord.Interaction):
+        start = self.page * self.per_page
+        end = start + self.per_page
+        page_entries = self.entries[start:end]
+        
+        entries_list = "\n".join([
+            f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
+            for j in page_entries
+        ])
+        
+        embed = discord.Embed(
+            title=f"📖 Your Journal ({len(self.entries)} entries)",
+            description=f"{entries_list}\n\nUse `/journal_view [name]` to view a specific entry.",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f"Page {self.page + 1} of {self.max_page + 1}")
+        
+        # Update buttons
+        for item in self.children:
+            if item.label == "◀ Previous":
+                item.disabled = (self.page == 0)
+            elif item.label == "Next ▶":
+                item.disabled = (self.page >= self.max_page)
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
 def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
@@ -806,8 +867,11 @@ async def pull_clarifier(interaction: discord.Interaction):
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
 @tree.command(name="journal", description="Save your last reading to your personal journal")
-@app_commands.describe(notes="Your personal notes or reflections on the reading")
-async def journal(interaction: discord.Interaction, notes: str):
+@app_commands.describe(
+    name="A unique name for this reading (e.g., 'Career Decision', 'Morning Reflection')",
+    notes="Your personal notes or reflections on the reading"
+)
+async def journal(interaction: discord.Interaction, name: str, notes: str):
     user_id = interaction.user.id
     
     # Check if there's a recent reading to save
@@ -823,11 +887,22 @@ async def journal(interaction: discord.Interaction, notes: str):
     # Get journals from GitHub
     journals, sha = get_journals_from_github()
     
+    # Check if name already exists for this user
+    user_id_str = str(user_id)
+    existing = next((j for j in journals if j.get("user_id") == user_id_str and j.get("name").lower() == name.lower()), None)
+    
+    if existing:
+        await interaction.followup.send(
+            f"❌ You already have a journal entry named '{name}'! Use a different name or delete the old one first with `/journal_delete {name}`",
+            ephemeral=True
+        )
+        return
+    
     # Create journal entry
     reading = last_readings[user_id]
     entry = {
-        "id": len(journals) + 1,
-        "user_id": str(user_id),
+        "user_id": user_id_str,
+        "name": name,
         "timestamp": reading["timestamp"],
         "reading_type": reading["reading_type"],
         "question": reading["question"],
@@ -847,10 +922,10 @@ async def journal(interaction: discord.Interaction, notes: str):
         
         embed = discord.Embed(
             title="📝 Reading Journaled",
-            description=f"**Your Notes:**\n{notes}\n\n**Cards:**\n{cards_display}",
+            description=f"**Name:** {name}\n\n**Your Notes:**\n{notes}\n\n**Cards:**\n{cards_display}",
             color=discord.Color.green()
         )
-        embed.set_footer(text=f"Entry #{entry['id']} • {datetime.fromisoformat(reading['timestamp']).strftime('%B %d, %Y at %I:%M %p')} UTC")
+        embed.set_footer(text=f"Saved • {datetime.fromisoformat(reading['timestamp']).strftime('%B %d, %Y at %I:%M %p')} UTC")
         
         await interaction.followup.send(embed=embed, ephemeral=True)
     else:
@@ -860,8 +935,8 @@ async def journal(interaction: discord.Interaction, notes: str):
         )
 
 @tree.command(name="journal_view", description="View your journal entries")
-@app_commands.describe(entry_id="Optional: View a specific entry by ID")
-async def journal_view(interaction: discord.Interaction, entry_id: int = None):
+@app_commands.describe(name="Optional: View a specific entry by name")
+async def journal_view(interaction: discord.Interaction, name: str = None):
     user_id = str(interaction.user.id)
     
     await interaction.response.defer(ephemeral=True)
@@ -874,17 +949,17 @@ async def journal_view(interaction: discord.Interaction, entry_id: int = None):
     
     if not user_journals:
         await interaction.followup.send(
-            "📖 Your journal is empty! Use `/journal [notes]` after a reading to save it.",
+            "📖 Your journal is empty! Use `/journal [name] [notes]` after a reading to save it.",
             ephemeral=True
         )
         return
     
-    if entry_id:
-        # View specific entry
-        entry = next((j for j in user_journals if j.get("id") == entry_id), None)
+    if name:
+        # View specific entry by name
+        entry = next((j for j in user_journals if j.get("name").lower() == name.lower()), None)
         if not entry:
             await interaction.followup.send(
-                f"❌ Entry #{entry_id} not found in your journal!",
+                f"❌ Entry '{name}' not found in your journal!",
                 ephemeral=True
             )
             return
@@ -897,7 +972,7 @@ async def journal_view(interaction: discord.Interaction, entry_id: int = None):
         question_text = f"**Question:** *{entry['question']}*\n\n" if entry.get("question") else ""
         
         embed = discord.Embed(
-            title=f"📖 Journal Entry #{entry['id']}",
+            title=f"📖 {entry['name']}",
             description=f"{question_text}**Cards:**\n{cards_display}\n\n**Your Notes:**\n{entry['notes']}",
             color=discord.Color.purple()
         )
@@ -906,23 +981,44 @@ async def journal_view(interaction: discord.Interaction, entry_id: int = None):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
     else:
-        # List all entries
-        entries_list = "\n".join([
-            f"**#{j['id']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')} - {j['reading_type'].replace('_', ' ').title()}"
-            for j in sorted(user_journals, key=lambda x: x['id'], reverse=True)[:10]
-        ])
+        # List all entries with pagination
+        sorted_entries = sorted(user_journals, key=lambda x: x['timestamp'], reverse=True)
         
-        embed = discord.Embed(
-            title=f"📖 Your Journal ({len(user_journals)} entries)",
-            description=f"{entries_list}\n\nUse `/journal_view [entry_id]` to view a specific entry.",
-            color=discord.Color.blue()
-        )
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        if len(sorted_entries) <= 10:
+            # No pagination needed
+            entries_list = "\n".join([
+                f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
+                for j in sorted_entries
+            ])
+            
+            embed = discord.Embed(
+                title=f"📖 Your Journal ({len(user_journals)} entries)",
+                description=f"{entries_list}\n\nUse `/journal_view [name]` to view a specific entry.",
+                color=discord.Color.blue()
+            )
+            
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            # Use pagination
+            page_entries = sorted_entries[:10]
+            entries_list = "\n".join([
+                f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
+                for j in page_entries
+            ])
+            
+            embed = discord.Embed(
+                title=f"📖 Your Journal ({len(user_journals)} entries)",
+                description=f"{entries_list}\n\nUse `/journal_view [name]` to view a specific entry.",
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text=f"Page 1 of {(len(sorted_entries) - 1) // 10 + 1}")
+            
+            view = JournalPaginationView(sorted_entries, user_id, page=0, per_page=10)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 @tree.command(name="journal_delete", description="Delete a journal entry")
-@app_commands.describe(entry_id="The ID of the entry to delete")
-async def journal_delete(interaction: discord.Interaction, entry_id: int):
+@app_commands.describe(name="The name of the entry to delete")
+async def journal_delete(interaction: discord.Interaction, name: str):
     user_id = str(interaction.user.id)
     
     await interaction.response.defer(ephemeral=True)
@@ -931,22 +1027,22 @@ async def journal_delete(interaction: discord.Interaction, entry_id: int):
     journals, sha = get_journals_from_github()
     
     # Find the entry
-    entry = next((j for j in journals if j.get("id") == entry_id and j.get("user_id") == user_id), None)
+    entry = next((j for j in journals if j.get("name").lower() == name.lower() and j.get("user_id") == user_id), None)
     
     if not entry:
         await interaction.followup.send(
-            f"❌ Entry #{entry_id} not found in your journal!",
+            f"❌ Entry '{name}' not found in your journal!",
             ephemeral=True
         )
         return
     
     # Remove it
-    journals = [j for j in journals if not (j.get("id") == entry_id and j.get("user_id") == user_id)]
+    journals = [j for j in journals if not (j.get("name").lower() == name.lower() and j.get("user_id") == user_id)]
     
     # Save to GitHub
     if save_journals_to_github(journals, sha):
         await interaction.followup.send(
-            f"🗑️ Entry #{entry_id} deleted from your journal.",
+            f"🗑️ Entry '{name}' deleted from your journal.",
             ephemeral=True
         )
     else:
