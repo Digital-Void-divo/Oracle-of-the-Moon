@@ -372,6 +372,67 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     else:
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
+@tree.command(name="custom_spread", description="Create your own custom card spread")
+@app_commands.describe(
+    name="Name for your spread (e.g., 'Self Discovery')",
+    positions="Position names separated by commas (e.g., 'Past, Present, Future')"
+)
+async def custom_spread(interaction: discord.Interaction, name: str, positions: str):
+    guild_id = interaction.guild_id or interaction.user.id
+    deck = get_deck(guild_id)
+    
+    # Parse positions from comma-separated string
+    position_list = [p.strip() for p in positions.split(",") if p.strip()]
+    
+    # Validate position count
+    if len(position_list) < 1:
+        await interaction.response.send_message("You need at least 1 position for a spread! 🎴", ephemeral=True)
+        return
+    
+    if len(position_list) > 10:
+        await interaction.response.send_message("Maximum 10 positions per spread! 🎴", ephemeral=True)
+        return
+    
+    card_count = len(position_list)
+    
+    # Check if we have enough cards
+    if len(deck) < card_count:
+        shuffle_deck(guild_id)
+        deck = get_deck(guild_id)
+        reshuffle_msg = "\n\n*The deck has been automatically reshuffled! 🔄*"
+    else:
+        reshuffle_msg = ""
+    
+    # Draw cards for spread
+    drawn_cards = [deck.pop(0) for _ in range(card_count)]
+    
+    # Randomly determine which cards are reversed (50% chance each)
+    reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
+    
+    # Defer response since image generation might take a moment
+    await interaction.response.defer()
+    
+    # Create initial composite with all cards face down
+    composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
+    
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with custom position labels
+        view = CardRevealView(drawn_cards, position_list, interaction, reversed_cards)
+        
+        embed = discord.Embed(
+            title=f"🔮 {name} Spread",
+            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}\n\n**Positions:** {', '.join(position_list)}",
+            color=discord.Color.purple()
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
+
 @tree.command(name="deck_info", description="See information about the current deck")
 async def deck_info(interaction: discord.Interaction):
     guild_id = interaction.guild_id or interaction.user.id
@@ -393,7 +454,7 @@ async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /spread, /deck_info')
+    print(f'📝 Commands: /shuffle, /draw, /spread, /custom_spread, /deck_info')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
