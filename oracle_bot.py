@@ -110,6 +110,21 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
         total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
         total_height = card_height
         
+        # Resize images if composite would be too large
+        # Discord has 8MB limit, so keep width reasonable
+        max_width = 3000  # pixels
+        if total_width > max_width:
+            scale_factor = max_width / total_width
+            card_width = int(card_width * scale_factor)
+            card_height = int(card_height * scale_factor)
+            spacing = int(spacing * scale_factor)
+            total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
+            total_height = card_height
+            
+            # Resize all card images
+            card_images = [img.resize((card_width, card_height), Image.Resampling.LANCZOS) for img in card_images]
+            print(f"Resized cards to fit within {max_width}px width")
+        
         print(f"Creating composite: {total_width}x{total_height}")
         
         # Create composite image
@@ -121,12 +136,36 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
             composite.paste(img, (x_offset, 0))
             x_offset += card_width + spacing
         
-        # Convert to bytes for Discord
+        # Convert to bytes for Discord with optimization
         img_bytes = io.BytesIO()
-        composite.save(img_bytes, format='PNG')
+        
+        # Try PNG first with compression
+        composite.save(img_bytes, format='PNG', optimize=True)
+        file_size = img_bytes.getbuffer().nbytes
+        
+        # If still too large, convert to JPEG with quality reduction
+        if file_size > 6_500_000:  # 6.5MB threshold (lower for edit safety)
+            print(f"PNG too large ({file_size} bytes), converting to JPEG")
+            img_bytes = io.BytesIO()
+            # Convert to RGB for JPEG (no transparency)
+            rgb_composite = Image.new('RGB', composite.size, (20, 20, 30))  # Dark background
+            rgb_composite.paste(composite, mask=composite.split()[3] if composite.mode == 'RGBA' else None)
+            rgb_composite.save(img_bytes, format='JPEG', quality=75, optimize=True)
+            file_size = img_bytes.getbuffer().nbytes
+            
+            # If STILL too large, resize
+            if file_size > 6_500_000:
+                print(f"JPEG still too large ({file_size} bytes), resizing...")
+                scale = 0.75
+                new_size = (int(rgb_composite.width * scale), int(rgb_composite.height * scale))
+                rgb_composite = rgb_composite.resize(new_size, Image.Resampling.LANCZOS)
+                img_bytes = io.BytesIO()
+                rgb_composite.save(img_bytes, format='JPEG', quality=75, optimize=True)
+                file_size = img_bytes.getbuffer().nbytes
+        
         img_bytes.seek(0)
         
-        print(f"Composite created successfully! Size: {img_bytes.getbuffer().nbytes} bytes")
+        print(f"Composite created successfully! Size: {file_size} bytes ({file_size / 1_000_000:.2f}MB)")
         return img_bytes
     except Exception as e:
         print(f"Error creating composite image: {e}")
@@ -311,6 +350,51 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     else:
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
+@tree.command(name="ask", description="Draw a card as an answer to your question")
+@app_commands.describe(question="Your question for the cards")
+async def ask(interaction: discord.Interaction, question: str):
+    guild_id = interaction.guild_id or interaction.user.id
+    deck = get_deck(guild_id)
+    
+    # Check if we have enough cards
+    if len(deck) < 1:
+        shuffle_deck(guild_id)
+        deck = get_deck(guild_id)
+        reshuffle_msg = "\n\n*The deck has been automatically reshuffled! 🔄*"
+    else:
+        reshuffle_msg = ""
+    
+    # Draw one card
+    drawn_card = deck.pop(0)
+    is_reversed = random.choice([True, False])
+    
+    # Defer response since image generation might take a moment
+    await interaction.response.defer()
+    
+    # Create initial composite with card face down
+    composite_bytes = create_composite_image([drawn_card], set(), [is_reversed])
+    
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with flip button
+        view = CardRevealView([drawn_card], ["Answer"], interaction, [is_reversed])
+        
+        # Truncate question if too long
+        display_question = question if len(question) <= 200 else question[:197] + "..."
+        
+        embed = discord.Embed(
+            title=f"❓ Question",
+            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}",
+            color=discord.Color.blue()
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
+
 @tree.command(name="spread", description="Perform a card spread reading")
 @app_commands.describe(spread_type="Type of spread to perform")
 @app_commands.choices(spread_type=[
@@ -449,12 +533,50 @@ async def deck_info(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="card_info", description="Look up a specific card's meaning")
+@app_commands.describe(card_name="Name of the card to look up")
+async def card_info(interaction: discord.Interaction, card_name: str):
+    # Try to find the card (case-insensitive partial match)
+    card_name_lower = card_name.lower()
+    matches = [name for name in CARDS.keys() if card_name_lower in name.lower()]
+    
+    if not matches:
+        await interaction.response.send_message(
+            f"❌ Card '{card_name}' not found. Use `/deck_info` to see all available cards.",
+            ephemeral=True
+        )
+        return
+    
+    if len(matches) > 1:
+        # Multiple matches - show options
+        match_list = "\n".join([f"• {name}" for name in matches[:10]])
+        await interaction.response.send_message(
+            f"🔍 Multiple cards match '{card_name}':\n{match_list}\n\nPlease be more specific!",
+            ephemeral=True
+        )
+        return
+    
+    # Single match found
+    found_card = matches[0]
+    card_meaning = CARDS[found_card]
+    card_url = get_card_image_url(found_card)
+    
+    embed = discord.Embed(
+        title=f"🔮 {found_card}",
+        description=f"**Upright Meaning:**\n{card_meaning}\n\n**Reversed Meaning:**\n🔄 When reversed, this card's energy is blocked, internalized, or expressing in shadow form. Consider the opposite or inverse of the upright meaning.",
+        color=discord.Color.purple()
+    )
+    embed.set_image(url=card_url)
+    embed.set_footer(text="This does not draw the card from the deck")
+    
+    await interaction.response.send_message(embed=embed)
+
 @client.event
 async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /spread, /custom_spread, /deck_info')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /deck_info, /card_info')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
