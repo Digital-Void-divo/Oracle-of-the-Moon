@@ -215,7 +215,7 @@ def shuffle_deck(guild_id):
     random.shuffle(deck_state[guild_id])
 
 class CardRevealView(View):
-    def __init__(self, cards, positions, interaction, reversed_cards):
+    def __init__(self, cards, positions, interaction, reversed_cards, question=None):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cards = cards  # List of card names
         self.reversed_cards = reversed_cards  # List of bools indicating if card is reversed
@@ -223,6 +223,7 @@ class CardRevealView(View):
         self.positions = positions or [f"Card {i+1}" for i in range(len(cards))]
         self.interaction = interaction
         self.message = None
+        self.question = question  # Optional question for /ask command
         
         # Create a button for each card
         for i in range(len(cards)):
@@ -272,6 +273,10 @@ class CardRevealView(View):
                         revealed_info.append(f"{title}\n*{meaning}*")
                     
                     description = "\n\n".join(revealed_info) if revealed_info else "Click a card to reveal!"
+                    
+                    # Prepend question if this is from /ask command
+                    if self.question:
+                        description = f"❓ **Question:** *{self.question}*\n\n" + description
                     
                     embed = discord.Embed(
                         title=f"🔮 Card Reading",
@@ -377,11 +382,11 @@ async def ask(interaction: discord.Interaction, question: str):
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
         
-        # Create view with flip button
-        view = CardRevealView([drawn_card], ["Answer"], interaction, [is_reversed])
-        
         # Truncate question if too long
         display_question = question if len(question) <= 200 else question[:197] + "..."
+        
+        # Create view with flip button
+        view = CardRevealView([drawn_card], ["Answer"], interaction, [is_reversed], question=display_question)
         
         embed = discord.Embed(
             title=f"❓ Question",
