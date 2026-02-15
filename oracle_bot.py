@@ -154,6 +154,69 @@ class JournalPaginationView(View):
         
         await interaction.response.edit_message(embed=embed, view=self)
 
+class DailyCardModal(discord.ui.Modal, title="Daily Card Interpretation"):
+    note = discord.ui.TextInput(
+        label="Your Interpretation",
+        style=discord.TextStyle.paragraph,
+        placeholder="Share your insight on today's card...",
+        required=True,
+        max_length=1000
+    )
+    
+    def __init__(self, card_name, is_reversed, channel):
+        super().__init__()
+        self.card_name = card_name
+        self.is_reversed = is_reversed
+        self.channel = channel
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # Get card image URL
+        card_url = get_card_image_url(self.card_name)
+        card_meaning = CARDS[self.card_name]
+        
+        # Create public post
+        today = datetime.utcnow().strftime("%B %d, %Y")
+        title = f"🌅 Daily Card - {today}"
+        
+        if self.is_reversed:
+            title_card = f"{self.card_name} (Reversed)"
+            meaning_text = f"🔄 {card_meaning}\n\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form.*"
+        else:
+            title_card = self.card_name
+            meaning_text = card_meaning
+        
+        embed = discord.Embed(
+            title=title,
+            description=f"**{title_card}**\n\n*{meaning_text}*\n\n**Interpretation:**\n{self.note.value}",
+            color=discord.Color.gold()
+        )
+        embed.set_image(url=card_url)
+        embed.set_footer(text=f"Reading by {interaction.user.display_name}")
+        
+        # Post to channel
+        try:
+            await self.channel.send(embed=embed)
+            await interaction.followup.send("✅ Daily card posted successfully!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Failed to post: {e}", ephemeral=True)
+
+class DailyCardView(View):
+    def __init__(self, card_name, is_reversed, channel):
+        super().__init__(timeout=300)
+        self.card_name = card_name
+        self.is_reversed = is_reversed
+        self.channel = channel
+        
+        button = Button(label="📝 Add Interpretation & Post", style=discord.ButtonStyle.green)
+        button.callback = self.show_modal
+        self.add_item(button)
+    
+    async def show_modal(self, interaction: discord.Interaction):
+        modal = DailyCardModal(self.card_name, self.is_reversed, self.channel)
+        await interaction.response.send_modal(modal)
+
 def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
@@ -1183,6 +1246,82 @@ async def journal_delete(interaction: discord.Interaction, name: str):
             ephemeral=True
         )
 
+@tree.command(name="daily_card", description="Draw and post a daily card to a channel")
+@app_commands.describe(channel="The channel to post the daily card to")
+async def daily_card(interaction: discord.Interaction, channel: discord.TextChannel):
+    guild_id = interaction.guild_id or interaction.user.id
+    deck = get_deck(guild_id)
+    
+    # Check if we have cards
+    if len(deck) < 1:
+        shuffle_deck(guild_id)
+        deck = get_deck(guild_id)
+    
+    # Draw one card
+    drawn_card = deck.pop(0)
+    is_reversed = random.choice([True, False])
+    
+    # Get card info
+    card_meaning = CARDS[drawn_card]
+    card_url = get_card_image_url(drawn_card)
+    
+    # Show card privately to the reader
+    title = f"{drawn_card}{' (Reversed)' if is_reversed else ''}"
+    if is_reversed:
+        meaning_text = f"🔄 {card_meaning}\n\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form.*"
+    else:
+        meaning_text = card_meaning
+    
+    embed = discord.Embed(
+        title=f"🌅 Today's Daily Card",
+        description=f"**{title}**\n\n*{meaning_text}*\n\nClick the button below to add your interpretation and post this to {channel.mention}!",
+        color=discord.Color.gold()
+    )
+    embed.set_image(url=card_url)
+    embed.set_footer(text="Only you can see this message")
+    
+    view = DailyCardView(drawn_card, is_reversed, channel)
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@tree.command(name="request_reading", description="Request a reading from the reader")
+@app_commands.describe(topic="Optional: What you'd like guidance on")
+async def request_reading(interaction: discord.Interaction, topic: str = None):
+    # Get the reader (you can hardcode their user ID or use a role)
+    # For now, we'll just mention any user with "Reader" role or make it configurable
+    
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message(
+            "❌ This command can only be used in a server!",
+            ephemeral=True
+        )
+        return
+    
+    # Find users with "Reader" role (or you can hardcode your friend's ID)
+    reader_role = discord.utils.get(guild.roles, name="Reader")
+    
+    if reader_role:
+        readers = [member for member in guild.members if reader_role in member.roles]
+        if readers:
+            reader_mentions = " ".join([reader.mention for reader in readers])
+        else:
+            reader_mentions = "@Reader"
+    else:
+        reader_mentions = "@Reader"
+    
+    # Create request message
+    topic_text = f"\n**Topic:** {topic}" if topic else ""
+    
+    embed = discord.Embed(
+        title="🔮 Reading Request",
+        description=f"{reader_mentions}\n\n{interaction.user.mention} has requested a reading!{topic_text}",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+    
+    await interaction.response.send_message(embed=embed)
+
 @tree.command(name="reading_stats", description="View statistics about your readings")
 async def reading_stats_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1263,7 +1402,7 @@ async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete, /reading_stats')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete, /reading_stats, /daily_card, /request_reading')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
