@@ -6,6 +6,9 @@ import os
 import io
 from PIL import Image
 import requests
+import json
+from datetime import datetime
+import base64
 
 # Bot setup
 intents = discord.Intents.default()
@@ -17,6 +20,69 @@ GITHUB_USERNAME = "Digital-Void-divo"
 GITHUB_REPO = "Oracle-of-the-Moon"
 GITHUB_BRANCH = "main"
 IMAGE_FOLDER = "card_images"
+JOURNAL_FILE = "journals.json"
+
+# GitHub token for writing journals (set in Railway environment variables)
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+
+def get_journals_from_github():
+    """Fetch the journals.json file from GitHub"""
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{JOURNAL_FILE}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            content = base64.b64decode(response.json()['content']).decode('utf-8')
+            return json.loads(content), response.json()['sha']
+        elif response.status_code == 404:
+            # File doesn't exist yet, return empty journal
+            return [], None
+        else:
+            print(f"Error fetching journals: {response.status_code}")
+            return [], None
+    except Exception as e:
+        print(f"Error loading journals: {e}")
+        return [], None
+
+def save_journals_to_github(journals, sha=None):
+    """Save the journals.json file to GitHub"""
+    if not GITHUB_TOKEN:
+        print("ERROR: GITHUB_TOKEN not set! Cannot save journals.")
+        return False
+    
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{JOURNAL_FILE}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    content = json.dumps(journals, indent=2)
+    encoded_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+    
+    data = {
+        "message": f"Update journals - {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC",
+        "content": encoded_content,
+        "branch": GITHUB_BRANCH
+    }
+    
+    if sha:
+        data["sha"] = sha
+    
+    try:
+        response = requests.put(url, headers=headers, json=data)
+        if response.status_code in [200, 201]:
+            print("Journals saved successfully to GitHub")
+            return True
+        else:
+            print(f"Error saving journals: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"Error saving journals: {e}")
+        return False
+
+# Store last reading per user for journaling
+last_readings = {}
 
 def get_card_image_url(card_name):
     """Generate GitHub raw URL for a card image"""
@@ -243,8 +309,12 @@ def undo_draw(guild_id):
     
     return cards
 
+def save_last_reading(user_id, reading_data):
+    """Save the last reading for potential journaling"""
+    last_readings[user_id] = reading_data
+
 class CardRevealView(View):
-    def __init__(self, cards, positions, interaction, reversed_cards, question=None):
+    def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw"):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cards = cards  # List of card names
         self.reversed_cards = reversed_cards  # List of bools indicating if card is reversed
@@ -253,6 +323,7 @@ class CardRevealView(View):
         self.interaction = interaction
         self.message = None
         self.question = question  # Optional question for /ask command
+        self.reading_type = reading_type  # Type of reading (draw, ask, spread, custom_spread, clarifier)
         
         # Create a button for each card
         for i in range(len(cards)):
@@ -317,6 +388,23 @@ class CardRevealView(View):
                     
                     # Edit the original message
                     await interaction.message.edit(embed=embed, view=self, attachments=[file])
+                    
+                    # Save reading for journaling when all cards are revealed
+                    if len(self.revealed) == len(self.cards):
+                        reading_data = {
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "reading_type": self.reading_type,
+                            "question": self.question,
+                            "cards": [
+                                {
+                                    "name": self.cards[i],
+                                    "position": self.positions[i],
+                                    "reversed": self.reversed_cards[i]
+                                }
+                                for i in range(len(self.cards))
+                            ]
+                        }
+                        save_last_reading(interaction.user.id, reading_data)
                 else:
                     await interaction.followup.send("Failed to load card image!", ephemeral=True)
             else:
@@ -373,7 +461,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
         file = discord.File(composite_bytes, filename="cards.png")
         
         # Create view with flip buttons
-        view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction, reversed_cards)
+        view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction, reversed_cards, reading_type="draw")
         
         embed = discord.Embed(
             title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
@@ -717,12 +805,162 @@ async def pull_clarifier(interaction: discord.Interaction):
     else:
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
+@tree.command(name="journal", description="Save your last reading to your personal journal")
+@app_commands.describe(notes="Your personal notes or reflections on the reading")
+async def journal(interaction: discord.Interaction, notes: str):
+    user_id = interaction.user.id
+    
+    # Check if there's a recent reading to save
+    if user_id not in last_readings:
+        await interaction.response.send_message(
+            "❌ No recent reading to journal! Complete a reading first (cards must be fully revealed).",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    # Get journals from GitHub
+    journals, sha = get_journals_from_github()
+    
+    # Create journal entry
+    reading = last_readings[user_id]
+    entry = {
+        "id": len(journals) + 1,
+        "user_id": str(user_id),
+        "timestamp": reading["timestamp"],
+        "reading_type": reading["reading_type"],
+        "question": reading["question"],
+        "cards": reading["cards"],
+        "notes": notes
+    }
+    
+    journals.append(entry)
+    
+    # Save to GitHub
+    if save_journals_to_github(journals, sha):
+        # Format cards for display
+        cards_display = "\n".join([
+            f"• **{card['position']}:** {card['name']}{' (Reversed)' if card['reversed'] else ''}"
+            for card in reading["cards"]
+        ])
+        
+        embed = discord.Embed(
+            title="📝 Reading Journaled",
+            description=f"**Your Notes:**\n{notes}\n\n**Cards:**\n{cards_display}",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"Entry #{entry['id']} • {datetime.fromisoformat(reading['timestamp']).strftime('%B %d, %Y at %I:%M %p')} UTC")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send(
+            "❌ Failed to save journal entry. Make sure GITHUB_TOKEN is set in Railway!",
+            ephemeral=True
+        )
+
+@tree.command(name="journal_view", description="View your journal entries")
+@app_commands.describe(entry_id="Optional: View a specific entry by ID")
+async def journal_view(interaction: discord.Interaction, entry_id: int = None):
+    user_id = str(interaction.user.id)
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    # Get journals from GitHub
+    journals, _ = get_journals_from_github()
+    
+    # Filter to this user's entries
+    user_journals = [j for j in journals if j.get("user_id") == user_id]
+    
+    if not user_journals:
+        await interaction.followup.send(
+            "📖 Your journal is empty! Use `/journal [notes]` after a reading to save it.",
+            ephemeral=True
+        )
+        return
+    
+    if entry_id:
+        # View specific entry
+        entry = next((j for j in user_journals if j.get("id") == entry_id), None)
+        if not entry:
+            await interaction.followup.send(
+                f"❌ Entry #{entry_id} not found in your journal!",
+                ephemeral=True
+            )
+            return
+        
+        cards_display = "\n".join([
+            f"• **{card['position']}:** {card['name']}{' (Reversed)' if card['reversed'] else ''}"
+            for card in entry["cards"]
+        ])
+        
+        question_text = f"**Question:** *{entry['question']}*\n\n" if entry.get("question") else ""
+        
+        embed = discord.Embed(
+            title=f"📖 Journal Entry #{entry['id']}",
+            description=f"{question_text}**Cards:**\n{cards_display}\n\n**Your Notes:**\n{entry['notes']}",
+            color=discord.Color.purple()
+        )
+        embed.add_field(name="Reading Type", value=entry['reading_type'].replace('_', ' ').title(), inline=True)
+        embed.add_field(name="Date", value=datetime.fromisoformat(entry['timestamp']).strftime('%B %d, %Y'), inline=True)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        # List all entries
+        entries_list = "\n".join([
+            f"**#{j['id']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')} - {j['reading_type'].replace('_', ' ').title()}"
+            for j in sorted(user_journals, key=lambda x: x['id'], reverse=True)[:10]
+        ])
+        
+        embed = discord.Embed(
+            title=f"📖 Your Journal ({len(user_journals)} entries)",
+            description=f"{entries_list}\n\nUse `/journal_view [entry_id]` to view a specific entry.",
+            color=discord.Color.blue()
+        )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+@tree.command(name="journal_delete", description="Delete a journal entry")
+@app_commands.describe(entry_id="The ID of the entry to delete")
+async def journal_delete(interaction: discord.Interaction, entry_id: int):
+    user_id = str(interaction.user.id)
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    # Get journals from GitHub
+    journals, sha = get_journals_from_github()
+    
+    # Find the entry
+    entry = next((j for j in journals if j.get("id") == entry_id and j.get("user_id") == user_id), None)
+    
+    if not entry:
+        await interaction.followup.send(
+            f"❌ Entry #{entry_id} not found in your journal!",
+            ephemeral=True
+        )
+        return
+    
+    # Remove it
+    journals = [j for j in journals if not (j.get("id") == entry_id and j.get("user_id") == user_id)]
+    
+    # Save to GitHub
+    if save_journals_to_github(journals, sha):
+        await interaction.followup.send(
+            f"🗑️ Entry #{entry_id} deleted from your journal.",
+            ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            "❌ Failed to delete entry. Please try again.",
+            ephemeral=True
+        )
+
 @client.event
 async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
