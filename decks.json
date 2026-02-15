@@ -1,0 +1,28 @@
+{
+  "Demo Tarot": {
+    "image_folder": "tarot",
+    "cards": {
+      "The Fool": "New beginnings, innocence, spontaneity, free spirit",
+      "The Magician": "Manifestation, resourcefulness, power, inspired action",
+      "The High Priestess": "Intuition, sacred knowledge, divine feminine, subconscious",
+      "The Empress": "Femininity, beauty, nature, abundance, nurturing",
+      "The Emperor": "Authority, structure, control, fatherhood",
+      "The Lovers": "Love, harmony, relationships, values alignment",
+      "The Chariot": "Control, willpower, success, determination",
+      "Strength": "Courage, inner strength, patience, compassion",
+      "The Hermit": "Soul searching, introspection, inner guidance, solitude",
+      "Wheel of Fortune": "Good luck, karma, life cycles, destiny",
+      "Justice": "Fairness, truth, cause and effect, law",
+      "The Hanged Man": "Pause, surrender, letting go, new perspective",
+      "Death": "Endings, transformation, transition, letting go",
+      "Temperance": "Balance, moderation, patience, purpose",
+      "The Devil": "Shadow self, attachment, addiction, restriction",
+      "The Tower": "Sudden change, upheaval, chaos, revelation",
+      "The Star": "Hope, faith, purpose, renewal, spirituality",
+      "The Moon": "Illusion, fear, anxiety, subconscious, intuition",
+      "The Sun": "Positivity, fun, warmth, success, vitality",
+      "Judgement": "Reflection, reckoning, inner calling, absolution",
+      "The World": "Completion, accomplishment, travel, fulfillment"
+    }
+  }
+}
