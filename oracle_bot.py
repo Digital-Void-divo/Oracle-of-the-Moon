@@ -21,9 +21,76 @@ GITHUB_REPO = "Oracle-of-the-Moon"
 GITHUB_BRANCH = "main"
 IMAGE_FOLDER = "card_images"
 JOURNAL_FILE = "journals.json"
+DECKS_FILE = "decks.json"
 
 # GitHub token for writing journals (set in Railway environment variables)
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+
+# Active deck per user/guild
+active_decks = {}  # {guild_id: deck_name}
+loaded_decks = {}  # {deck_name: {cards: {...}, image_folder: "..."}}
+
+def load_decks_from_github():
+    """Load all deck definitions from GitHub"""
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{DECKS_FILE}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            content = base64.b64decode(response.json()['content']).decode('utf-8')
+            decks_data = json.loads(content)
+            loaded_decks.update(decks_data)
+            print(f"Loaded {len(decks_data)} decks from GitHub")
+            return True
+        elif response.status_code == 404:
+            # File doesn't exist, use default deck
+            print("No decks.json found, using default deck")
+            loaded_decks["Demo Tarot"] = {
+                "cards": CARDS,
+                "image_folder": "tarot"
+            }
+            return False
+        else:
+            print(f"Error loading decks: {response.status_code}")
+            loaded_decks["Demo Tarot"] = {
+                "cards": CARDS,
+                "image_folder": "tarot"
+            }
+            return False
+    except Exception as e:
+        print(f"Error loading decks: {e}")
+        loaded_decks["Demo Tarot"] = {
+            "cards": CARDS,
+            "image_folder": "tarot"
+        }
+        return False
+
+def get_active_deck(guild_id):
+    """Get the active deck for a guild/user"""
+    if guild_id not in active_decks:
+        # Default to first available deck
+        active_decks[guild_id] = list(loaded_decks.keys())[0] if loaded_decks else "Demo Tarot"
+    return active_decks[guild_id]
+
+def get_deck_cards(guild_id):
+    """Get the cards for the active deck"""
+    deck_name = get_active_deck(guild_id)
+    if deck_name in loaded_decks:
+        return loaded_decks[deck_name]["cards"]
+    return CARDS  # Fallback
+
+def get_deck_image_folder(guild_id):
+    """Get the image folder for the active deck"""
+    deck_name = get_active_deck(guild_id)
+    if deck_name in loaded_decks:
+        return loaded_decks[deck_name].get("image_folder", "tarot")
+    return "tarot"  # Fallback
+
+def get_card_meaning(card_name, guild_id):
+    """Get the meaning of a card from the active deck"""
+    cards = get_deck_cards(guild_id)
+    return cards.get(card_name, "Card meaning not found")
 
 def get_journals_from_github():
     """Fetch the journals.json file from GitHub"""
@@ -217,17 +284,29 @@ class DailyCardView(View):
         modal = DailyCardModal(self.card_name, self.is_reversed, self.channel)
         await interaction.response.send_modal(modal)
 
-def get_card_image_url(card_name):
+def get_card_image_url(card_name, guild_id=None):
     """Generate GitHub raw URL for a card image"""
     # Convert card name to filename (lowercase, replace spaces with hyphens)
     filename = card_name.lower().replace(" ", "-").replace("•", "").strip()
     # Add .png extension
     filename = f"{filename}.png"
-    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{filename}"
+    
+    # Get deck-specific image folder
+    if guild_id:
+        deck_folder = get_deck_image_folder(guild_id)
+    else:
+        deck_folder = "tarot"  # Default fallback
+    
+    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{deck_folder}/{filename}"
 
-def get_card_back_url():
+def get_card_back_url(guild_id=None):
     """Get the card back image URL"""
-    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/card-back.png"
+    if guild_id:
+        deck_folder = get_deck_image_folder(guild_id)
+    else:
+        deck_folder = "tarot"
+    
+    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{deck_folder}/card-back.png"
 
 # Image cache to avoid re-downloading
 image_cache = {}
@@ -405,13 +484,15 @@ undo_state = {}  # Tracks last drawn cards for undo functionality
 def get_deck(guild_id):
     """Get or initialize deck for a guild"""
     if guild_id not in deck_state:
-        deck_state[guild_id] = list(CARDS.keys())
+        cards = get_deck_cards(guild_id)
+        deck_state[guild_id] = list(cards.keys())
         random.shuffle(deck_state[guild_id])
     return deck_state[guild_id]
 
 def shuffle_deck(guild_id):
     """Reset and shuffle the deck"""
-    deck_state[guild_id] = list(CARDS.keys())
+    cards = get_deck_cards(guild_id)
+    deck_state[guild_id] = list(cards.keys())
     random.shuffle(deck_state[guild_id])
     # Clear undo state when shuffling
     if guild_id in undo_state:
@@ -1246,6 +1327,69 @@ async def journal_delete(interaction: discord.Interaction, name: str):
             ephemeral=True
         )
 
+@tree.command(name="deck_list", description="View all available decks")
+async def deck_list(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or interaction.user.id
+    current_deck = get_active_deck(guild_id)
+    
+    if not loaded_decks:
+        await interaction.response.send_message(
+            "❌ No decks available! Make sure decks.json is configured.",
+            ephemeral=True
+        )
+        return
+    
+    deck_list_text = []
+    for deck_name, deck_data in loaded_decks.items():
+        card_count = len(deck_data["cards"])
+        is_active = "✨ " if deck_name == current_deck else ""
+        deck_list_text.append(f"{is_active}**{deck_name}** - {card_count} cards")
+    
+    embed = discord.Embed(
+        title="🎴 Available Decks",
+        description="\n".join(deck_list_text) + f"\n\nUse `/deck_switch [deck_name]` to change decks.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"Currently using: {current_deck}")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@tree.command(name="deck_switch", description="Switch to a different deck")
+@app_commands.describe(deck_name="The name of the deck to switch to")
+async def deck_switch(interaction: discord.Interaction, deck_name: str):
+    guild_id = interaction.guild_id or interaction.user.id
+    
+    # Find deck (case-insensitive)
+    deck_match = None
+    for name in loaded_decks.keys():
+        if name.lower() == deck_name.lower():
+            deck_match = name
+            break
+    
+    if not deck_match:
+        available = ", ".join(loaded_decks.keys())
+        await interaction.response.send_message(
+            f"❌ Deck '{deck_name}' not found!\n\nAvailable decks: {available}",
+            ephemeral=True
+        )
+        return
+    
+    # Switch deck
+    active_decks[guild_id] = deck_match
+    
+    # Reset the deck state with new cards
+    shuffle_deck(guild_id)
+    
+    card_count = len(loaded_decks[deck_match]["cards"])
+    
+    embed = discord.Embed(
+        title="🎴 Deck Switched",
+        description=f"Now using **{deck_match}** ({card_count} cards)\n\nThe deck has been shuffled and is ready for readings! ✨",
+        color=discord.Color.green()
+    )
+    
+    await interaction.response.send_message(embed=embed)
+
 @tree.command(name="daily_card", description="Draw and post a daily card to a channel")
 @app_commands.describe(channel="The channel to post the daily card to")
 async def daily_card(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -1287,8 +1431,7 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
 @tree.command(name="request_reading", description="Request a reading from the reader")
 @app_commands.describe(topic="Optional: What you'd like guidance on")
 async def request_reading(interaction: discord.Interaction, topic: str = None):
-    # Get the reader (you can hardcode their user ID or use a role)
-    # For now, we'll just mention any user with "Reader" role or make it configurable
+    # Get the reader (Wasteland Oracle role)
     
     guild = interaction.guild
     if not guild:
@@ -1298,17 +1441,17 @@ async def request_reading(interaction: discord.Interaction, topic: str = None):
         )
         return
     
-    # Find users with "Reader" role (or you can hardcode your friend's ID)
-    reader_role = discord.utils.get(guild.roles, name="Reader")
+    # Find users with "Wasteland Oracle" role
+    reader_role = discord.utils.get(guild.roles, name="Wasteland Oracle")
     
     if reader_role:
         readers = [member for member in guild.members if reader_role in member.roles]
         if readers:
             reader_mentions = " ".join([reader.mention for reader in readers])
         else:
-            reader_mentions = "@Reader"
+            reader_mentions = "@Wasteland Oracle"
     else:
-        reader_mentions = "@Reader"
+        reader_mentions = "@Wasteland Oracle"
     
     # Create request message
     topic_text = f"\n**Topic:** {topic}" if topic else ""
@@ -1399,10 +1542,14 @@ async def reading_stats_command(interaction: discord.Interaction):
 
 @client.event
 async def on_ready():
+    # Load decks from GitHub
+    load_decks_from_github()
+    
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete, /reading_stats, /daily_card, /request_reading')
+    print(f'📦 Loaded {len(loaded_decks)} deck(s): {", ".join(loaded_decks.keys())}')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /deck_list, /deck_switch, /card_info, /journal, /journal_view, /journal_delete, /reading_stats, /daily_card, /request_reading')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
