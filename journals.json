@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "user_id": "204185815696277504",
+    "timestamp": "2026-02-15T13:44:14.995220",
+    "reading_type": "draw",
+    "question": null,
+    "cards": [
+      {
+        "name": "The Devil",
+        "position": "Mind",
+        "reversed": false
+      },
+      {
+        "name": "The Hermit",
+        "position": "Body",
+        "reversed": true
+      },
+      {
+        "name": "The Tower",
+        "position": "Spirit",
+        "reversed": false
+      }
+    ],
+    "notes": "Why are they gay?"
+  }
+]
