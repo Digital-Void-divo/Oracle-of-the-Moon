@@ -201,6 +201,7 @@ CARDS = {
 
 # Deck state - tracks what's been drawn
 deck_state = {}
+undo_state = {}  # Tracks last drawn cards for undo functionality
 
 def get_deck(guild_id):
     """Get or initialize deck for a guild"""
@@ -213,6 +214,34 @@ def shuffle_deck(guild_id):
     """Reset and shuffle the deck"""
     deck_state[guild_id] = list(CARDS.keys())
     random.shuffle(deck_state[guild_id])
+    # Clear undo state when shuffling
+    if guild_id in undo_state:
+        del undo_state[guild_id]
+
+def save_undo_state(guild_id, cards):
+    """Save cards for potential undo"""
+    undo_state[guild_id] = cards
+
+def can_undo(guild_id):
+    """Check if undo is available"""
+    return guild_id in undo_state and len(undo_state[guild_id]) > 0
+
+def undo_draw(guild_id):
+    """Undo the last draw and return cards to deck"""
+    if not can_undo(guild_id):
+        return []
+    
+    cards = undo_state[guild_id]
+    deck = get_deck(guild_id)
+    
+    # Add cards back to the front of the deck
+    for card in reversed(cards):
+        deck.insert(0, card)
+    
+    # Clear undo state
+    del undo_state[guild_id]
+    
+    return cards
 
 class CardRevealView(View):
     def __init__(self, cards, positions, interaction, reversed_cards, question=None):
@@ -328,6 +357,9 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     # Draw cards
     drawn_cards = [deck.pop(0) for _ in range(count)]
     
+    # Save for undo
+    save_undo_state(guild_id, drawn_cards)
+    
     # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(count)]
     
@@ -371,6 +403,10 @@ async def ask(interaction: discord.Interaction, question: str):
     
     # Draw one card
     drawn_card = deck.pop(0)
+    
+    # Save for undo
+    save_undo_state(guild_id, [drawn_card])
+    
     is_reversed = random.choice([True, False])
     
     # Defer response since image generation might take a moment
@@ -431,6 +467,9 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     
     # Draw cards for spread
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
+    
+    # Save for undo
+    save_undo_state(guild_id, drawn_cards)
     
     # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
@@ -494,6 +533,9 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     
     # Draw cards for spread
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
+    
+    # Save for undo
+    save_undo_state(guild_id, drawn_cards)
     
     # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
@@ -576,12 +618,84 @@ async def card_info(interaction: discord.Interaction, card_name: str):
     
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="undo", description="Undo the last card draw and return cards to the deck")
+async def undo(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or interaction.user.id
+    
+    if not can_undo(guild_id):
+        await interaction.response.send_message(
+            "❌ No recent draw to undo! You can only undo the most recent draw.",
+            ephemeral=True
+        )
+        return
+    
+    cards = undo_draw(guild_id)
+    card_list = ", ".join(cards)
+    
+    embed = discord.Embed(
+        title="↩️ Draw Undone",
+        description=f"Returned {len(cards)} card{'s' if len(cards) > 1 else ''} to the deck:\n*{card_list}*",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="These cards have been placed back at the top of the deck")
+    
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="pull_clarifier", description="Draw an additional card to clarify a previous reading")
+async def pull_clarifier(interaction: discord.Interaction):
+    guild_id = interaction.guild_id or interaction.user.id
+    deck = get_deck(guild_id)
+    
+    # Check if we have enough cards
+    if len(deck) < 1:
+        shuffle_deck(guild_id)
+        deck = get_deck(guild_id)
+        reshuffle_msg = "\n\n*The deck has been automatically reshuffled! 🔄*"
+    else:
+        reshuffle_msg = ""
+    
+    # Draw one clarifier card
+    drawn_card = deck.pop(0)
+    
+    # Clarifiers are added to existing undo state, not replacing it
+    # This way you can undo the whole reading including clarifier
+    if can_undo(guild_id):
+        undo_state[guild_id].append(drawn_card)
+    else:
+        save_undo_state(guild_id, [drawn_card])
+    
+    is_reversed = random.choice([True, False])
+    
+    # Defer response since image generation might take a moment
+    await interaction.response.defer()
+    
+    # Create initial composite with card face down
+    composite_bytes = create_composite_image([drawn_card], set(), [is_reversed])
+    
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with flip button
+        view = CardRevealView([drawn_card], ["Clarifier"], interaction, [is_reversed])
+        
+        embed = discord.Embed(
+            title=f"🔍 Clarifier Card",
+            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}",
+            color=discord.Color.gold()
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Cards remaining in deck: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
+
 @client.event
 async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /deck_info, /card_info')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /deck_info, /card_info')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
