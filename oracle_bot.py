@@ -84,6 +84,15 @@ def save_journals_to_github(journals, sha=None):
 # Store last reading per user for journaling
 last_readings = {}
 
+# Track reading stats
+reading_stats = {
+    "total_readings": 0,
+    "readings_by_date": {},  # {date: count}
+    "readings_by_person": {},  # {user_id: count}
+    "cards_drawn": {},  # {card_name: count}
+    "last_reading_date": None
+}
+
 class JournalPaginationView(View):
     def __init__(self, entries, user_id, page=0, per_page=10):
         super().__init__(timeout=180)
@@ -374,8 +383,35 @@ def save_last_reading(user_id, reading_data):
     """Save the last reading for potential journaling"""
     last_readings[user_id] = reading_data
 
+def track_reading(cards, for_user_id=None):
+    """Track stats for a completed reading"""
+    today = datetime.utcnow().date().isoformat()
+    
+    # Increment total
+    reading_stats["total_readings"] += 1
+    
+    # Track by date
+    if today not in reading_stats["readings_by_date"]:
+        reading_stats["readings_by_date"][today] = 0
+    reading_stats["readings_by_date"][today] += 1
+    
+    # Track by person (for_user_id is the person reading was for)
+    person_key = str(for_user_id) if for_user_id else "personal"
+    if person_key not in reading_stats["readings_by_person"]:
+        reading_stats["readings_by_person"][person_key] = 0
+    reading_stats["readings_by_person"][person_key] += 1
+    
+    # Track cards drawn
+    for card in cards:
+        if card not in reading_stats["cards_drawn"]:
+            reading_stats["cards_drawn"][card] = 0
+        reading_stats["cards_drawn"][card] += 1
+    
+    # Update last reading date
+    reading_stats["last_reading_date"] = today
+
 class CardRevealView(View):
-    def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw"):
+    def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw", for_user=None):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cards = cards  # List of card names
         self.reversed_cards = reversed_cards  # List of bools indicating if card is reversed
@@ -385,6 +421,7 @@ class CardRevealView(View):
         self.message = None
         self.question = question  # Optional question for /ask command
         self.reading_type = reading_type  # Type of reading (draw, ask, spread, custom_spread, clarifier)
+        self.for_user = for_user  # User this reading is for (None = personal)
         
         # Create a button for each card
         for i in range(len(cards)):
@@ -456,6 +493,7 @@ class CardRevealView(View):
                             "timestamp": datetime.utcnow().isoformat(),
                             "reading_type": self.reading_type,
                             "question": self.question,
+                            "for_user": self.for_user,
                             "cards": [
                                 {
                                     "name": self.cards[i],
@@ -466,6 +504,9 @@ class CardRevealView(View):
                             ]
                         }
                         save_last_reading(interaction.user.id, reading_data)
+                        
+                        # Track stats
+                        track_reading(self.cards, for_user_id=self.for_user)
                 else:
                     await interaction.followup.send("Failed to load card image!", ephemeral=True)
             else:
@@ -866,6 +907,87 @@ async def pull_clarifier(interaction: discord.Interaction):
     else:
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
+@tree.command(name="reading_for", description="Perform a reading for another person")
+@app_commands.describe(
+    user="The person this reading is for",
+    reading_type="Type of reading to perform"
+)
+@app_commands.choices(reading_type=[
+    app_commands.Choice(name="Draw Cards", value="draw"),
+    app_commands.Choice(name="Ask a Question", value="ask"),
+    app_commands.Choice(name="Past • Present • Future", value="past_present_future"),
+    app_commands.Choice(name="Mind • Body • Spirit", value="mind_body_spirit"),
+    app_commands.Choice(name="Situation • Action • Outcome", value="situation_action_outcome"),
+])
+async def reading_for(interaction: discord.Interaction, user: discord.User, reading_type: str):
+    guild_id = interaction.guild_id or interaction.user.id
+    deck = get_deck(guild_id)
+    
+    # Determine card count and positions based on reading type
+    if reading_type == "draw":
+        card_count = 3  # Default to 3 cards for "draw"
+        positions = [f"Card {i+1}" for i in range(card_count)]
+        title = f"🎴 Reading for {user.mention}"
+        color = discord.Color.blue()
+    elif reading_type == "ask":
+        card_count = 1
+        positions = ["Answer"]
+        title = f"❓ Question Reading for {user.mention}"
+        color = discord.Color.blue()
+    else:
+        # It's a spread
+        spreads = {
+            "past_present_future": ["Past", "Present", "Future"],
+            "mind_body_spirit": ["Mind", "Body", "Spirit"],
+            "situation_action_outcome": ["Situation", "Action", "Outcome"],
+        }
+        positions = spreads[reading_type]
+        card_count = len(positions)
+        spread_title = reading_type.replace("_", " • ").title()
+        title = f"🔮 {spread_title} Spread for {user.mention}"
+        color = discord.Color.purple()
+    
+    # Check if we have enough cards
+    if len(deck) < card_count:
+        shuffle_deck(guild_id)
+        deck = get_deck(guild_id)
+        reshuffle_msg = "\n\n*The deck has been automatically reshuffled! 🔄*"
+    else:
+        reshuffle_msg = ""
+    
+    # Draw cards
+    drawn_cards = [deck.pop(0) for _ in range(card_count)]
+    
+    # Save for undo
+    save_undo_state(guild_id, drawn_cards)
+    
+    # Randomly determine which cards are reversed
+    reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
+    
+    # Defer response
+    await interaction.response.defer()
+    
+    # Create initial composite with all cards face down
+    composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
+    
+    if composite_bytes:
+        file = discord.File(composite_bytes, filename="cards.png")
+        
+        # Create view with flip buttons
+        view = CardRevealView(drawn_cards, positions, interaction, reversed_cards, reading_type=reading_type, for_user=user.id)
+        
+        embed = discord.Embed(
+            title=title,
+            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}",
+            color=color
+        )
+        embed.set_image(url="attachment://cards.png")
+        embed.set_footer(text=f"Reading by {interaction.user.display_name} • Cards remaining: {len(deck)}")
+        
+        await interaction.followup.send(embed=embed, file=file, view=view)
+    else:
+        await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
+
 @tree.command(name="journal", description="Save your last reading to your personal journal")
 @app_commands.describe(
     name="A unique name for this reading (e.g., 'Career Decision', 'Morning Reflection')",
@@ -906,6 +1028,7 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
         "timestamp": reading["timestamp"],
         "reading_type": reading["reading_type"],
         "question": reading["question"],
+        "for_user": reading.get("for_user"),  # User ID this reading was for
         "cards": reading["cards"],
         "notes": notes
     }
@@ -920,9 +1043,18 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
             for card in reading["cards"]
         ])
         
+        # Add "Reading for" if applicable
+        for_user_text = ""
+        if reading.get("for_user"):
+            try:
+                user_obj = await interaction.client.fetch_user(int(reading["for_user"]))
+                for_user_text = f"**Reading for:** {user_obj.name}\n\n"
+            except:
+                for_user_text = f"**Reading for:** User ID {reading['for_user']}\n\n"
+        
         embed = discord.Embed(
             title="📝 Reading Journaled",
-            description=f"**Name:** {name}\n\n**Your Notes:**\n{notes}\n\n**Cards:**\n{cards_display}",
+            description=f"**Name:** {name}\n\n{for_user_text}**Your Notes:**\n{notes}\n\n**Cards:**\n{cards_display}",
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Saved • {datetime.fromisoformat(reading['timestamp']).strftime('%B %d, %Y at %I:%M %p')} UTC")
@@ -1051,12 +1183,87 @@ async def journal_delete(interaction: discord.Interaction, name: str):
             ephemeral=True
         )
 
+@tree.command(name="reading_stats", description="View statistics about your readings")
+async def reading_stats_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    
+    stats = reading_stats
+    
+    if stats["total_readings"] == 0:
+        await interaction.followup.send(
+            "📊 No readings yet! Complete a reading to start tracking stats.",
+            ephemeral=True
+        )
+        return
+    
+    # Calculate streak
+    today = datetime.utcnow().date()
+    streak = 0
+    check_date = today
+    while check_date.isoformat() in stats["readings_by_date"]:
+        streak += 1
+        check_date = check_date.replace(day=check_date.day - 1) if check_date.day > 1 else check_date.replace(month=check_date.month - 1, day=28)
+    
+    # Most active day of week
+    day_counts = {}
+    for date_str, count in stats["readings_by_date"].items():
+        date_obj = datetime.fromisoformat(date_str)
+        day_name = date_obj.strftime("%A")
+        if day_name not in day_counts:
+            day_counts[day_name] = 0
+        day_counts[day_name] += count
+    
+    most_active_day = max(day_counts.items(), key=lambda x: x[1]) if day_counts else ("N/A", 0)
+    
+    # Readings per person
+    person_list = []
+    for person_id, count in sorted(stats["readings_by_person"].items(), key=lambda x: x[1], reverse=True)[:5]:
+        if person_id == "personal":
+            person_list.append(f"• Personal: {count} readings")
+        else:
+            try:
+                user_obj = await interaction.client.fetch_user(int(person_id))
+                person_list.append(f"• {user_obj.name}: {count} readings")
+            except:
+                person_list.append(f"• User {person_id}: {count} readings")
+    
+    person_text = "\n".join(person_list) if person_list else "No readings yet"
+    
+    # Most and least drawn cards
+    if stats["cards_drawn"]:
+        most_drawn = max(stats["cards_drawn"].items(), key=lambda x: x[1])
+        least_drawn = min(stats["cards_drawn"].items(), key=lambda x: x[1])
+        
+        # Find cards never drawn
+        all_cards = set(CARDS.keys())
+        drawn_cards = set(stats["cards_drawn"].keys())
+        never_drawn = all_cards - drawn_cards
+        
+        if never_drawn:
+            least_drawn = (list(never_drawn)[0], 0)
+        
+        cards_text = f"**Most Drawn:** {most_drawn[0]} ({most_drawn[1]} times)\n**Least Drawn:** {least_drawn[0]} ({least_drawn[1]} times)"
+    else:
+        cards_text = "No card data yet"
+    
+    embed = discord.Embed(
+        title="📊 Reading Statistics",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="📈 Total Readings", value=str(stats["total_readings"]), inline=True)
+    embed.add_field(name="🔥 Current Streak", value=f"{streak} day{'s' if streak != 1 else ''}", inline=True)
+    embed.add_field(name="⭐ Most Active Day", value=f"{most_active_day[0]} ({most_active_day[1]} readings)", inline=True)
+    embed.add_field(name="👥 Readings Per Person", value=person_text, inline=False)
+    embed.add_field(name="🎴 Card Stats", value=cards_text, inline=False)
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @client.event
 async def on_ready():
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /card_info, /journal, /journal_view, /journal_delete, /reading_stats')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
