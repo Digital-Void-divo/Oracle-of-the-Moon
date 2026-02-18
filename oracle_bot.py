@@ -157,19 +157,53 @@ reading_stats = {
     "last_reading_date": None
 }
 
-def check_ethereal_draw(guild_id):
+def check_emergent_draw(guild_id):
     """
-    1–2.5% chance that a card slips through the veil and is lost.
-    Returns the card name if triggered, or None.
+    Roll for a spontaneous card event before a reading:
+      - 0.25% chance: Manifested Draw — 2 cards rise unbidden from the deck.
+      - 1.25% chance: Emergent Draw   — 1 card surfaces before the reading begins.
+    Returns (list_of_lost_cards, draw_type_string) or ([], None) if nothing happens.
     """
-    chance = random.uniform(0.01, 0.025)
-    if random.random() < chance:
-        deck = get_deck(guild_id)
-        if len(deck) > 0:
-            lost_card = deck.pop(0)
-            print(f"Ethereal Draw triggered! Lost card: {lost_card}")
-            return lost_card
-    return None
+    deck = get_deck(guild_id)
+    roll = random.random()
+
+    if roll < 0.0025 and len(deck) >= 2:
+        # Manifested Draw — 2 cards
+        lost = [deck.pop(0), deck.pop(0)]
+        print(f"Manifested Draw triggered! Cards: {lost}")
+        return lost, "Manifested Draw"
+    elif roll < 0.015 and len(deck) >= 1:
+        # Emergent Draw — 1 card (1.25% window above the 0.25% Manifested band)
+        lost = [deck.pop(0)]
+        print(f"Emergent Draw triggered! Card: {lost}")
+        return lost, "Emergent Draw"
+
+    return [], None
+
+def build_emergent_message(lost_cards, draw_type):
+    """
+    Build the flavor text block to append to an embed description
+    when an Emergent or Manifested Draw occurs.
+    """
+    if not lost_cards or draw_type is None:
+        return ""
+
+    if draw_type == "Emergent Draw":
+        card_text = f"**{lost_cards[0]}**"
+        return (
+            f"\n\n✦ ***{draw_type}*** ✦\n"
+            f"*Before the reading could begin, {card_text} rose unbidden from the deck — "
+            f"surfacing for a fleeting moment before dissolving back into the unseen. "
+            f"It has been drawn from the deck but will not be read.*"
+        )
+    else:  # Manifested Draw
+        card_text = f"**{lost_cards[0]}** and **{lost_cards[1]}**"
+        return (
+            f"\n\n✦ ***{draw_type}*** ✦\n"
+            f"*Something stirs beneath the surface. {card_text} have manifested from the deck "
+            f"of their own accord — drawn into being before the reading could take shape. "
+            f"They are spent. They will not be read.*"
+        )
 
 class JournalPaginationView(View):
     def __init__(self, entries, user_id, page=0, per_page=10):
@@ -315,16 +349,11 @@ def create_fallback_card_back(width=200, height=350):
     """Generate a simple card back image if none exists in the repo"""
     img = Image.new('RGBA', (width, height), (30, 10, 60, 255))
     draw = ImageDraw.Draw(img)
-    
-    # Outer and inner border
     draw.rectangle([5, 5, width - 6, height - 6], outline=(180, 130, 255, 255), width=3)
     draw.rectangle([12, 12, width - 13, height - 13], outline=(120, 80, 200, 255), width=1)
-    
-    # Crescent moon in the center
     cx, cy = width // 2, height // 2
     draw.ellipse([cx - 30, cy - 30, cx + 30, cy + 30], outline=(200, 160, 255, 255), width=2)
     draw.ellipse([cx - 10, cy - 30, cx + 50, cy + 30], fill=(30, 10, 60, 255))
-    
     return img
 
 def download_card_image(url, rotate=False):
@@ -507,65 +536,90 @@ def shuffle_deck(guild_id):
         del undo_state[guild_id]
 
 def save_undo_state(guild_id, cards):
-    """Save cards for potential undo"""
     undo_state[guild_id] = cards
 
 def can_undo(guild_id):
-    """Check if undo is available"""
     return guild_id in undo_state and len(undo_state[guild_id]) > 0
 
 def undo_draw(guild_id):
-    """Undo the last draw and return cards to deck"""
     if not can_undo(guild_id):
         return []
-    
     cards = undo_state[guild_id]
     deck = get_deck(guild_id)
-    
     for card in reversed(cards):
         deck.insert(0, card)
-    
     del undo_state[guild_id]
     return cards
 
 def save_last_reading(user_id, reading_data):
-    """Save the last reading for potential journaling"""
     last_readings[user_id] = reading_data
 
 def track_reading(cards, for_user_id=None):
-    """Track stats for a completed reading"""
     today = datetime.utcnow().date().isoformat()
-    
     reading_stats["total_readings"] += 1
-    
     if today not in reading_stats["readings_by_date"]:
         reading_stats["readings_by_date"][today] = 0
     reading_stats["readings_by_date"][today] += 1
-    
     person_key = str(for_user_id) if for_user_id else "personal"
     if person_key not in reading_stats["readings_by_person"]:
         reading_stats["readings_by_person"][person_key] = 0
     reading_stats["readings_by_person"][person_key] += 1
-    
     for card in cards:
         if card not in reading_stats["cards_drawn"]:
             reading_stats["cards_drawn"][card] = 0
         reading_stats["cards_drawn"][card] += 1
-    
     reading_stats["last_reading_date"] = today
 
-def check_ethereal_draw(guild_id):
+def check_emergent_draw(guild_id):
     """
-    1–2.5% chance that a card slips through the veil and is silently consumed.
-    Returns the lost card name if triggered, or None.
+    Roll for a spontaneous card event before a reading:
+      - 0.25% chance → Manifested Draw: 2 cards rise unbidden from the deck.
+      - 1.25% chance → Emergent Draw:   1 card surfaces before the reading begins.
+    Returns (list_of_lost_cards, draw_type_string) or ([], None).
+    The Manifested band is checked first (lower roll = rarer event).
     """
-    if random.random() < random.uniform(0.01, 0.025):
-        deck = get_deck(guild_id)
-        if len(deck) > 0:
-            lost_card = deck.pop(0)
-            print(f"Ethereal Draw triggered! Lost card: {lost_card}")
-            return lost_card
-    return None
+    deck = get_deck(guild_id)
+    roll = random.random()
+
+    if roll < 0.0025:
+        # Manifested Draw — 2 cards (0.25%)
+        if len(deck) >= 2:
+            lost = [deck.pop(0), deck.pop(0)]
+            print(f"Manifested Draw triggered! Cards: {lost}")
+            return lost, "Manifested Draw"
+    elif roll < 0.015:
+        # Emergent Draw — 1 card (1.25% window above the Manifested band)
+        if len(deck) >= 1:
+            lost = [deck.pop(0)]
+            print(f"Emergent Draw triggered! Card: {lost}")
+            return lost, "Emergent Draw"
+
+    return [], None
+
+def build_emergent_message(lost_cards, draw_type):
+    """
+    Build the italic flavor block appended to an embed description
+    when an Emergent or Manifested Draw fires.
+    """
+    if not lost_cards or draw_type is None:
+        return ""
+
+    if draw_type == "Emergent Draw":
+        card_text = f"**{lost_cards[0]}**"
+        return (
+            f"\n\n✦ ***Emergent Draw*** ✦\n"
+            f"*Before the reading could begin, {card_text} rose unbidden from the deck — "
+            f"surfacing for a fleeting moment before dissolving back into the unseen. "
+            f"It has been drawn from the deck but will not be read.*"
+        )
+    else:
+        card_text = f"**{lost_cards[0]}** and **{lost_cards[1]}**"
+        return (
+            f"\n\n✦ ***Manifested Draw*** ✦\n"
+            f"*Something stirs beneath the surface. {card_text} have manifested from the deck "
+            f"of their own accord — drawn into being before the reading could take shape. "
+            f"They are spent. They will not be read.*"
+        )
 
 class CardRevealView(View):
     def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw", for_user=None):
@@ -623,7 +677,7 @@ class CardRevealView(View):
                         description = f"❓ **Question:** *{self.question}*\n\n" + description
                     
                     embed = discord.Embed(
-                        title=f"🔮 Card Reading",
+                        title="🔮 Card Reading",
                         description=description,
                         color=discord.Color.purple()
                     )
@@ -660,7 +714,6 @@ class CardRevealView(View):
 async def shuffle(interaction: discord.Interaction):
     guild_id = interaction.guild_id or interaction.user.id
     shuffle_deck(guild_id)
-    
     embed = discord.Embed(
         title="🔮 Deck Shuffled",
         description="The cards have been shuffled and reset. Ready for a new reading! ✨",
@@ -685,9 +738,8 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling cards
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_cards = [deck.pop(0) for _ in range(count)]
     save_undo_state(guild_id, drawn_cards)
@@ -703,7 +755,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
         
         embed = discord.Embed(
             title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
-            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}{ethereal_msg}",
+            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}{emergent_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -726,9 +778,8 @@ async def ask(interaction: discord.Interaction, question: str):
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling card
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_card = deck.pop(0)
     save_undo_state(guild_id, [drawn_card])
@@ -744,8 +795,8 @@ async def ask(interaction: discord.Interaction, question: str):
         view = CardRevealView([drawn_card], ["Answer"], interaction, [is_reversed], question=display_question)
         
         embed = discord.Embed(
-            title=f"❓ Question",
-            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}{ethereal_msg}",
+            title="❓ Question",
+            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}{emergent_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -782,9 +833,8 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling cards
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
@@ -801,7 +851,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
         
         embed = discord.Embed(
             title=f"🔮 {spread_title} Spread",
-            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}{ethereal_msg}",
+            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}{emergent_msg}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -839,9 +889,8 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling cards
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
@@ -857,7 +906,7 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
         
         embed = discord.Embed(
             title=f"🔮 {name} Spread",
-            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}{ethereal_msg}\n\n**Positions:** {', '.join(position_list)}",
+            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}{emergent_msg}\n\n**Positions:** {', '.join(position_list)}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -874,7 +923,7 @@ async def deck_info(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎴 Current Deck",
-        description=f"**Demo Tarot Deck** (Major Arcana)\n\nA simplified tarot deck for demonstration. Your friend can customize this with her oracle cards!",
+        description="**Demo Tarot Deck** (Major Arcana)\n\nA simplified tarot deck for demonstration.",
         color=discord.Color.gold()
     )
     embed.add_field(name="Total Cards", value=str(len(CARDS)), inline=True)
@@ -954,7 +1003,6 @@ async def undo_and_shuffle(interaction: discord.Interaction):
     
     cards = undo_draw(guild_id)
     card_list = ", ".join(cards)
-    
     deck = get_deck(guild_id)
     random.shuffle(deck)
     
@@ -979,9 +1027,8 @@ async def pull_clarifier(interaction: discord.Interaction):
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling card
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_card = deck.pop(0)
     
@@ -1001,8 +1048,8 @@ async def pull_clarifier(interaction: discord.Interaction):
         view = CardRevealView([drawn_card], ["Clarifier"], interaction, [is_reversed])
         
         embed = discord.Embed(
-            title=f"🔍 Clarifier Card",
-            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}{ethereal_msg}",
+            title="🔍 Clarifier Card",
+            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}{emergent_msg}",
             color=discord.Color.gold()
         )
         embed.set_image(url="attachment://cards.png")
@@ -1057,9 +1104,8 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
     else:
         reshuffle_msg = ""
     
-    # Check for Ethereal Draw before pulling cards
-    ethereal_card = check_ethereal_draw(guild_id)
-    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
@@ -1075,7 +1121,7 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
         
         embed = discord.Embed(
             title=title,
-            description=f"{user.mention} — Click the buttons below to reveal each card! ✨{reshuffle_msg}{ethereal_msg}",
+            description=f"{user.mention} — Click the buttons below to reveal each card! ✨{reshuffle_msg}{emergent_msg}",
             color=color
         )
         embed.set_image(url="attachment://cards.png")
@@ -1109,7 +1155,6 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
     await interaction.response.defer(ephemeral=True)
     
     journals, sha = get_journals_from_github()
-    
     user_id_str = str(user_id)
     existing = next((j for j in journals if j.get("user_id") == user_id_str and j.get("name").lower() == name.lower()), None)
     
@@ -1212,13 +1257,11 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
                 f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
                 for j in sorted_entries
             ])
-            
             embed = discord.Embed(
                 title=f"📖 Your Journal ({len(user_journals)} entries)",
                 description=f"{entries_list}\n\nUse `/journal_view [name]` to view a specific entry.",
                 color=discord.Color.blue()
             )
-            
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             page_entries = sorted_entries[:10]
@@ -1226,14 +1269,12 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
                 f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
                 for j in page_entries
             ])
-            
             embed = discord.Embed(
                 title=f"📖 Your Journal ({len(user_journals)} entries)",
                 description=f"{entries_list}\n\nUse `/journal_view [name]` to view a specific entry.",
                 color=discord.Color.blue()
             )
             embed.set_footer(text=f"Page 1 of {(len(sorted_entries) - 1) // 10 + 1}")
-            
             view = JournalPaginationView(sorted_entries, user_id, page=0, per_page=10)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
@@ -1257,15 +1298,9 @@ async def journal_delete(interaction: discord.Interaction, name: str):
     journals = [j for j in journals if not (j.get("name").lower() == name.lower() and j.get("user_id") == user_id)]
     
     if save_journals_to_github(journals, sha):
-        await interaction.followup.send(
-            f"🗑️ Entry '{name}' deleted from your journal.",
-            ephemeral=True
-        )
+        await interaction.followup.send(f"🗑️ Entry '{name}' deleted from your journal.", ephemeral=True)
     else:
-        await interaction.followup.send(
-            "❌ Failed to delete entry. Please try again.",
-            ephemeral=True
-        )
+        await interaction.followup.send("❌ Failed to delete entry. Please try again.", ephemeral=True)
 
 @tree.command(name="deck_list", description="View all available decks")
 async def deck_list(interaction: discord.Interaction):
@@ -1287,7 +1322,7 @@ async def deck_list(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎴 Available Decks",
-        description="\n".join(deck_list_text) + f"\n\nUse `/deck_switch [deck_name]` to change decks.",
+        description="\n".join(deck_list_text) + "\n\nUse `/deck_switch [deck_name]` to change decks.",
         color=discord.Color.blue()
     )
     embed.set_footer(text=f"Currently using: {current_deck}")
@@ -1322,7 +1357,6 @@ async def deck_switch(interaction: discord.Interaction, deck_name: str):
         description=f"Now using **{deck_match}** ({card_count} cards)\n\nThe deck has been shuffled and is ready for readings! ✨",
         color=discord.Color.green()
     )
-    
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="daily_card", description="Draw and post a daily card to a channel")
@@ -1337,7 +1371,6 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
     
     drawn_card = deck.pop(0)
     is_reversed = random.choice([True, False])
-    
     card_meaning = CARDS[drawn_card]
     card_url = get_card_image_url(drawn_card)
     
@@ -1348,7 +1381,7 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
         meaning_text = card_meaning
     
     embed = discord.Embed(
-        title=f"🌅 Today's Daily Card",
+        title="🌅 Today's Daily Card",
         description=f"**{title}**\n\n*{meaning_text}*\n\nClick the button below to add your interpretation and post this to {channel.mention}!",
         color=discord.Color.gold()
     )
@@ -1535,11 +1568,14 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="🌫️ Ethereal Draws",
+        name="✦ Emergent & Manifested Draws",
         value=(
-            "Occasionally, a card may slip through the veil during a reading — consumed by unseen forces before it can be read. "
-            "This is known as an **Ethereal Draw**. The card is lost from the deck until the next shuffle. "
-            "Some things are simply not meant to be seen."
+            "Occasionally, cards may stir on their own before a reading begins.\n\n"
+            "**Emergent Draw** *(1.25% chance)* — A single card rises unbidden from the deck, "
+            "surfacing for a moment before dissolving. It is spent and will not be read.\n\n"
+            "**Manifested Draw** *(0.25% chance)* — Two cards manifest of their own accord, "
+            "drawn into being before the reading can take shape. Both are spent. Neither will be read.\n\n"
+            "*Some things are simply not meant to be seen.*"
         ),
         inline=False
     )
