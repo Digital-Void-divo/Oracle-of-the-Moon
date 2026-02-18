@@ -1545,6 +1545,80 @@ async def reading_stats_command(interaction: discord.Interaction):
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@tree.command(name="help", description="View all available commands and what they do")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🔮 Oracle of the Moon — Commands",
+        description="Here's everything you can do with this bot:",
+        color=discord.Color.purple()
+    )
+    
+    embed.add_field(
+        name="🎴 Drawing Cards",
+        value=(
+            "`/draw [count]` — Draw 1–5 cards from the deck and reveal them one by one\n"
+            "`/ask [question]` — Draw a single card as an answer to your question\n"
+            "`/pull_clarifier` — Draw an extra card to clarify your current reading"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🔮 Spreads",
+        value=(
+            "`/spread [type]` — Perform a 3-card spread (Past/Present/Future, Mind/Body/Spirit, or Situation/Action/Outcome)\n"
+            "`/custom_spread [name] [positions]` — Create your own spread with custom position names (comma-separated, up to 10)"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="👥 Reading for Others",
+        value=(
+            "`/reading_for [user] [type]` — Perform a reading for another server member\n"
+            "`/request_reading [topic]` — Request a reading from the Wasteland Oracle"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🃏 Deck Management",
+        value=(
+            "`/shuffle` — Shuffle and reset the deck for a fresh start\n"
+            "`/undo` — Return the last drawn cards to the top of the deck\n"
+            "`/undo_and_shuffle` — Return the last drawn cards and shuffle the whole deck\n"
+            "`/deck_info` — See how many cards are in the deck and how many remain\n"
+            "`/deck_list` — View all available decks\n"
+            "`/deck_switch [name]` — Switch to a different deck"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📖 Journal",
+        value=(
+            "`/journal [name] [notes]` — Save your last reading with personal notes\n"
+            "`/journal_view` — Browse all your journal entries\n"
+            "`/journal_view [name]` — View a specific journal entry by name\n"
+            "`/journal_delete [name]` — Delete a journal entry"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🌅 Daily & Stats",
+        value=(
+            "`/daily_card [channel]` — Draw a daily card and post it (with your interpretation) to a channel\n"
+            "`/reading_stats` — View statistics about your readings and card history\n"
+            "`/card_info [name]` — Look up the meaning of any card without drawing it"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="✨ The cards are always listening.")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 @client.event
 async def on_ready():
     # Load decks from GitHub
