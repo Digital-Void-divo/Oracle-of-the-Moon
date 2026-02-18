@@ -159,31 +159,34 @@ reading_stats = {
 
 def check_emergent_draw(guild_id):
     """
-    Roll for a spontaneous card event before a reading:
-      - 0.25% chance: Manifested Draw — 2 cards rise unbidden from the deck.
-      - 1.25% chance: Emergent Draw   — 1 card surfaces before the reading begins.
-    Returns (list_of_lost_cards, draw_type_string) or ([], None) if nothing happens.
+    Simulates a card accidentally slipping out during shuffling.
+    Called only from /shuffle and /undo_and_shuffle.
+      - 0.25% chance → Manifested Draw: 2 cards slip out.
+      - 1.25% chance → Emergent Draw:   1 card slips out.
+    Returns (list_of_lost_cards, draw_type_string) or ([], None).
     """
     deck = get_deck(guild_id)
     roll = random.random()
 
-    if roll < 0.0025 and len(deck) >= 2:
-        # Manifested Draw — 2 cards
-        lost = [deck.pop(0), deck.pop(0)]
-        print(f"Manifested Draw triggered! Cards: {lost}")
-        return lost, "Manifested Draw"
-    elif roll < 0.015 and len(deck) >= 1:
-        # Emergent Draw — 1 card (1.25% window above the 0.25% Manifested band)
-        lost = [deck.pop(0)]
-        print(f"Emergent Draw triggered! Card: {lost}")
-        return lost, "Emergent Draw"
+    if roll < 0.0025:
+        # Manifested Draw — 2 cards (0.25%)
+        if len(deck) >= 2:
+            lost = [deck.pop(random.randint(0, len(deck) - 1)) for _ in range(2)]
+            print(f"Manifested Draw triggered! Cards: {lost}")
+            return lost, "Manifested Draw"
+    elif roll < 0.015:
+        # Emergent Draw — 1 card (1.25% window above Manifested band)
+        if len(deck) >= 1:
+            lost = [deck.pop(random.randint(0, len(deck) - 1))]
+            print(f"Emergent Draw triggered! Card: {lost}")
+            return lost, "Emergent Draw"
 
     return [], None
 
 def build_emergent_message(lost_cards, draw_type):
     """
-    Build the flavor text block to append to an embed description
-    when an Emergent or Manifested Draw occurs.
+    Build the flavor text block to append to a shuffle embed
+    when an Emergent or Manifested Draw occurs during shuffling.
     """
     if not lost_cards or draw_type is None:
         return ""
@@ -191,18 +194,18 @@ def build_emergent_message(lost_cards, draw_type):
     if draw_type == "Emergent Draw":
         card_text = f"**{lost_cards[0]}**"
         return (
-            f"\n\n✦ ***{draw_type}*** ✦\n"
-            f"*Before the reading could begin, {card_text} rose unbidden from the deck — "
-            f"surfacing for a fleeting moment before dissolving back into the unseen. "
-            f"It has been drawn from the deck but will not be read.*"
+            f"\n\n✦ ***Emergent Draw*** ✦\n"
+            f"*While shuffling, {card_text} slipped free from the deck — "
+            f"tumbling out before it could be returned to the fold. "
+            f"It has been removed from the deck.*"
         )
-    else:  # Manifested Draw
+    else:
         card_text = f"**{lost_cards[0]}** and **{lost_cards[1]}**"
         return (
-            f"\n\n✦ ***{draw_type}*** ✦\n"
-            f"*Something stirs beneath the surface. {card_text} have manifested from the deck "
-            f"of their own accord — drawn into being before the reading could take shape. "
-            f"They are spent. They will not be read.*"
+            f"\n\n✦ ***Manifested Draw*** ✦\n"
+            f"*The shuffle was restless. {card_text} slipped free of their own accord — "
+            f"falling from the deck before the cards had settled. "
+            f"Both have been removed from the deck.*"
         )
 
 class JournalPaginationView(View):
@@ -570,57 +573,6 @@ def track_reading(cards, for_user_id=None):
         reading_stats["cards_drawn"][card] += 1
     reading_stats["last_reading_date"] = today
 
-def check_emergent_draw(guild_id):
-    """
-    Roll for a spontaneous card event before a reading:
-      - 0.25% chance → Manifested Draw: 2 cards rise unbidden from the deck.
-      - 1.25% chance → Emergent Draw:   1 card surfaces before the reading begins.
-    Returns (list_of_lost_cards, draw_type_string) or ([], None).
-    The Manifested band is checked first (lower roll = rarer event).
-    """
-    deck = get_deck(guild_id)
-    roll = random.random()
-
-    if roll < 0.0025:
-        # Manifested Draw — 2 cards (0.25%)
-        if len(deck) >= 2:
-            lost = [deck.pop(0), deck.pop(0)]
-            print(f"Manifested Draw triggered! Cards: {lost}")
-            return lost, "Manifested Draw"
-    elif roll < 0.015:
-        # Emergent Draw — 1 card (1.25% window above the Manifested band)
-        if len(deck) >= 1:
-            lost = [deck.pop(0)]
-            print(f"Emergent Draw triggered! Card: {lost}")
-            return lost, "Emergent Draw"
-
-    return [], None
-
-def build_emergent_message(lost_cards, draw_type):
-    """
-    Build the italic flavor block appended to an embed description
-    when an Emergent or Manifested Draw fires.
-    """
-    if not lost_cards or draw_type is None:
-        return ""
-
-    if draw_type == "Emergent Draw":
-        card_text = f"**{lost_cards[0]}**"
-        return (
-            f"\n\n✦ ***Emergent Draw*** ✦\n"
-            f"*Before the reading could begin, {card_text} rose unbidden from the deck — "
-            f"surfacing for a fleeting moment before dissolving back into the unseen. "
-            f"It has been drawn from the deck but will not be read.*"
-        )
-    else:
-        card_text = f"**{lost_cards[0]}** and **{lost_cards[1]}**"
-        return (
-            f"\n\n✦ ***Manifested Draw*** ✦\n"
-            f"*Something stirs beneath the surface. {card_text} have manifested from the deck "
-            f"of their own accord — drawn into being before the reading could take shape. "
-            f"They are spent. They will not be read.*"
-        )
-
 class CardRevealView(View):
     def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw", for_user=None):
         super().__init__(timeout=300)
@@ -714,11 +666,18 @@ class CardRevealView(View):
 async def shuffle(interaction: discord.Interaction):
     guild_id = interaction.guild_id or interaction.user.id
     shuffle_deck(guild_id)
+    deck = get_deck(guild_id)
+
+    # Check for a card slipping out during the shuffle
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
+
     embed = discord.Embed(
         title="🔮 Deck Shuffled",
-        description="The cards have been shuffled and reset. Ready for a new reading! ✨",
+        description=f"The cards have been shuffled and reset. Ready for a new reading! ✨{emergent_msg}",
         color=discord.Color.purple()
     )
+    embed.set_footer(text=f"Cards in deck: {len(deck)}")
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="draw", description="Draw cards from the deck")
@@ -738,9 +697,6 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     else:
         reshuffle_msg = ""
     
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
-    
     drawn_cards = [deck.pop(0) for _ in range(count)]
     save_undo_state(guild_id, drawn_cards)
     reversed_cards = [random.choice([True, False]) for _ in range(count)]
@@ -755,7 +711,7 @@ async def draw(interaction: discord.Interaction, count: int = 1):
         
         embed = discord.Embed(
             title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
-            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}{emergent_msg}",
+            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -778,9 +734,6 @@ async def ask(interaction: discord.Interaction, question: str):
     else:
         reshuffle_msg = ""
     
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
-    
     drawn_card = deck.pop(0)
     save_undo_state(guild_id, [drawn_card])
     is_reversed = random.choice([True, False])
@@ -796,7 +749,7 @@ async def ask(interaction: discord.Interaction, question: str):
         
         embed = discord.Embed(
             title="❓ Question",
-            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}{emergent_msg}",
+            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -833,9 +786,6 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     else:
         reshuffle_msg = ""
     
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
-    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
@@ -851,7 +801,7 @@ async def spread(interaction: discord.Interaction, spread_type: str):
         
         embed = discord.Embed(
             title=f"🔮 {spread_title} Spread",
-            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}{emergent_msg}",
+            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -889,9 +839,6 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     else:
         reshuffle_msg = ""
     
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
-    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
@@ -906,7 +853,7 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
         
         embed = discord.Embed(
             title=f"🔮 {name} Spread",
-            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}{emergent_msg}\n\n**Positions:** {', '.join(position_list)}",
+            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}\n\n**Positions:** {', '.join(position_list)}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -1005,10 +952,14 @@ async def undo_and_shuffle(interaction: discord.Interaction):
     card_list = ", ".join(cards)
     deck = get_deck(guild_id)
     random.shuffle(deck)
-    
+
+    # Check for a card slipping out during the shuffle
+    lost_cards, draw_type = check_emergent_draw(guild_id)
+    emergent_msg = build_emergent_message(lost_cards, draw_type)
+
     embed = discord.Embed(
         title="↩️🔀 Undone & Shuffled",
-        description=f"Returned {len(cards)} card{'s' if len(cards) > 1 else ''} to the deck:\n*{card_list}*\n\nThe entire deck has been shuffled! ✨",
+        description=f"Returned {len(cards)} card{'s' if len(cards) > 1 else ''} to the deck:\n*{card_list}*\n\nThe entire deck has been shuffled! ✨{emergent_msg}",
         color=discord.Color.green()
     )
     embed.set_footer(text=f"{len(deck)} cards in deck")
@@ -1026,9 +977,6 @@ async def pull_clarifier(interaction: discord.Interaction):
         reshuffle_msg = "\n\n*The deck has been automatically reshuffled! 🔄*"
     else:
         reshuffle_msg = ""
-    
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
     
     drawn_card = deck.pop(0)
     
@@ -1049,7 +997,7 @@ async def pull_clarifier(interaction: discord.Interaction):
         
         embed = discord.Embed(
             title="🔍 Clarifier Card",
-            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}{emergent_msg}",
+            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}",
             color=discord.Color.gold()
         )
         embed.set_image(url="attachment://cards.png")
@@ -1104,9 +1052,6 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
     else:
         reshuffle_msg = ""
     
-    lost_cards, draw_type = check_emergent_draw(guild_id)
-    emergent_msg = build_emergent_message(lost_cards, draw_type)
-    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
     save_undo_state(guild_id, drawn_cards)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
@@ -1121,7 +1066,7 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
         
         embed = discord.Embed(
             title=title,
-            description=f"{user.mention} — Click the buttons below to reveal each card! ✨{reshuffle_msg}{emergent_msg}",
+            description=f"{user.mention} — Click the buttons below to reveal each card! ✨{reshuffle_msg}",
             color=color
         )
         embed.set_image(url="attachment://cards.png")
@@ -1570,12 +1515,12 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(
         name="✦ Emergent & Manifested Draws",
         value=(
-            "Occasionally, cards may stir on their own before a reading begins.\n\n"
-            "**Emergent Draw** *(1.25% chance)* — A single card rises unbidden from the deck, "
-            "surfacing for a moment before dissolving. It is spent and will not be read.\n\n"
-            "**Manifested Draw** *(0.25% chance)* — Two cards manifest of their own accord, "
-            "drawn into being before the reading can take shape. Both are spent. Neither will be read.\n\n"
-            "*Some things are simply not meant to be seen.*"
+            "Occasionally, a card may slip free during a shuffle.\n\n"
+            "**Emergent Draw** *(1.25% chance on shuffle)* — A single card tumbles loose from the deck "
+            "mid-shuffle and is removed.\n\n"
+            "**Manifested Draw** *(0.25% chance on shuffle)* — Two cards slip free at once, "
+            "falling from the deck before the cards have settled. Both are removed.\n\n"
+            "*It happens with physical decks too. The cards have their own ideas.*"
         ),
         inline=False
     )
