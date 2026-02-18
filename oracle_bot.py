@@ -138,13 +138,13 @@ def check_emergent_draw(guild_id):
     deck = get_deck(guild_id)
     roll = random.random()
 
-    if roll < 0.0025:
+    if roll < 0.0005:
         if len(deck) >= 2:
             lost = [deck.pop(random.randint(0, len(deck) - 1))]
             lost.append(deck.pop(random.randint(0, len(deck) - 1)))
             print(f"Manifested Draw triggered! Cards: {lost}")
             return lost, "Manifested Draw"
-    elif roll < 0.015:
+    elif roll < 0.01:
         if len(deck) >= 1:
             lost = [deck.pop(random.randint(0, len(deck) - 1))]
             print(f"Emergent Draw triggered! Card: {lost}")
