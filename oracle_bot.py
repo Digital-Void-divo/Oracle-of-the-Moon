@@ -4,7 +4,7 @@ from discord.ui import Button, View
 import random
 import os
 import io
-from PIL import Image
+from PIL import Image, ImageDraw
 import requests
 import json
 from datetime import datetime
@@ -44,7 +44,6 @@ def load_decks_from_github():
             print(f"Loaded {len(decks_data)} decks from GitHub")
             return True
         elif response.status_code == 404:
-            # File doesn't exist, use default deck
             print("No decks.json found, using default deck")
             loaded_decks["Demo Tarot"] = {
                 "cards": CARDS,
@@ -69,7 +68,6 @@ def load_decks_from_github():
 def get_active_deck(guild_id):
     """Get the active deck for a guild/user"""
     if guild_id not in active_decks:
-        # Default to first available deck
         active_decks[guild_id] = list(loaded_decks.keys())[0] if loaded_decks else "Demo Tarot"
     return active_decks[guild_id]
 
@@ -78,14 +76,14 @@ def get_deck_cards(guild_id):
     deck_name = get_active_deck(guild_id)
     if deck_name in loaded_decks:
         return loaded_decks[deck_name]["cards"]
-    return CARDS  # Fallback
+    return CARDS
 
 def get_deck_image_folder(guild_id):
     """Get the image folder for the active deck"""
     deck_name = get_active_deck(guild_id)
     if deck_name in loaded_decks:
         return loaded_decks[deck_name].get("image_folder", "tarot")
-    return "tarot"  # Fallback
+    return "tarot"
 
 def get_card_meaning(card_name, guild_id):
     """Get the meaning of a card from the active deck"""
@@ -103,7 +101,6 @@ def get_journals_from_github():
             content = base64.b64decode(response.json()['content']).decode('utf-8')
             return json.loads(content), response.json()['sha']
         elif response.status_code == 404:
-            # File doesn't exist yet, return empty journal
             return [], None
         else:
             print(f"Error fetching journals: {response.status_code}")
@@ -154,11 +151,25 @@ last_readings = {}
 # Track reading stats
 reading_stats = {
     "total_readings": 0,
-    "readings_by_date": {},  # {date: count}
-    "readings_by_person": {},  # {user_id: count}
-    "cards_drawn": {},  # {card_name: count}
+    "readings_by_date": {},
+    "readings_by_person": {},
+    "cards_drawn": {},
     "last_reading_date": None
 }
+
+def check_ethereal_draw(guild_id):
+    """
+    1–2.5% chance that a card slips through the veil and is lost.
+    Returns the card name if triggered, or None.
+    """
+    chance = random.uniform(0.01, 0.025)
+    if random.random() < chance:
+        deck = get_deck(guild_id)
+        if len(deck) > 0:
+            lost_card = deck.pop(0)
+            print(f"Ethereal Draw triggered! Lost card: {lost_card}")
+            return lost_card
+    return None
 
 class JournalPaginationView(View):
     def __init__(self, entries, user_id, page=0, per_page=10):
@@ -169,12 +180,10 @@ class JournalPaginationView(View):
         self.per_page = per_page
         self.max_page = (len(entries) - 1) // per_page
         
-        # Add previous button
         prev_button = Button(label="◀ Previous", style=discord.ButtonStyle.primary, disabled=(page == 0))
         prev_button.callback = self.previous_page
         self.add_item(prev_button)
         
-        # Add next button
         next_button = Button(label="Next ▶", style=discord.ButtonStyle.primary, disabled=(page >= self.max_page))
         next_button.callback = self.next_page
         self.add_item(next_button)
@@ -183,7 +192,6 @@ class JournalPaginationView(View):
         if interaction.user.id != int(self.user_id):
             await interaction.response.send_message("This isn't your journal!", ephemeral=True)
             return
-        
         self.page -= 1
         await self.update_message(interaction)
     
@@ -191,7 +199,6 @@ class JournalPaginationView(View):
         if interaction.user.id != int(self.user_id):
             await interaction.response.send_message("This isn't your journal!", ephemeral=True)
             return
-        
         self.page += 1
         await self.update_message(interaction)
     
@@ -212,7 +219,6 @@ class JournalPaginationView(View):
         )
         embed.set_footer(text=f"Page {self.page + 1} of {self.max_page + 1}")
         
-        # Update buttons
         for item in self.children:
             if item.label == "◀ Previous":
                 item.disabled = (self.page == 0)
@@ -239,11 +245,9 @@ class DailyCardModal(discord.ui.Modal, title="Daily Card Interpretation"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # Get card image URL
         card_url = get_card_image_url(self.card_name)
         card_meaning = CARDS[self.card_name]
         
-        # Create public post
         today = datetime.utcnow().strftime("%B %d, %Y")
         title = f"🌅 Daily Card - {today}"
         
@@ -262,7 +266,6 @@ class DailyCardModal(discord.ui.Modal, title="Daily Card Interpretation"):
         embed.set_image(url=card_url)
         embed.set_footer(text=f"Reading by {interaction.user.display_name}")
         
-        # Post to channel
         try:
             await self.channel.send(embed=embed)
             await interaction.followup.send("✅ Daily card posted successfully!", ephemeral=True)
@@ -286,16 +289,13 @@ class DailyCardView(View):
 
 def get_card_image_url(card_name, guild_id=None):
     """Generate GitHub raw URL for a card image"""
-    # Convert card name to filename (lowercase, replace spaces with hyphens)
     filename = card_name.lower().replace(" ", "-").replace("•", "").strip()
-    # Add .png extension
     filename = f"{filename}.png"
     
-    # Get deck-specific image folder
     if guild_id:
         deck_folder = get_deck_image_folder(guild_id)
     else:
-        deck_folder = "tarot"  # Default fallback
+        deck_folder = "tarot"
     
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{IMAGE_FOLDER}/{deck_folder}/{filename}"
 
@@ -310,6 +310,22 @@ def get_card_back_url(guild_id=None):
 
 # Image cache to avoid re-downloading
 image_cache = {}
+
+def create_fallback_card_back(width=200, height=350):
+    """Generate a simple card back image if none exists in the repo"""
+    img = Image.new('RGBA', (width, height), (30, 10, 60, 255))
+    draw = ImageDraw.Draw(img)
+    
+    # Outer and inner border
+    draw.rectangle([5, 5, width - 6, height - 6], outline=(180, 130, 255, 255), width=3)
+    draw.rectangle([12, 12, width - 13, height - 13], outline=(120, 80, 200, 255), width=1)
+    
+    # Crescent moon in the center
+    cx, cy = width // 2, height // 2
+    draw.ellipse([cx - 30, cy - 30, cx + 30, cy + 30], outline=(200, 160, 255, 255), width=2)
+    draw.ellipse([cx - 10, cy - 30, cx + 50, cy + 30], fill=(30, 10, 60, 255))
+    
+    return img
 
 def download_card_image(url, rotate=False):
     """Download and cache a card image"""
@@ -327,24 +343,33 @@ def download_card_image(url, rotate=False):
             content_type = response.headers.get('content-type', '')
             if 'image' not in content_type:
                 print(f"Warning: Content-Type is {content_type}, not an image!")
-                print(f"First 100 bytes: {response.content[:100]}")
+                if 'card-back' in url:
+                    print("Using generated card back as fallback")
+                    img = create_fallback_card_back()
+                    image_cache[cache_key] = img.copy()
+                    return img
                 return None
             
             img = Image.open(io.BytesIO(response.content))
-            img.load()  # Force load to validate
+            img.load()
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
             
-            # Rotate 180 degrees if reversed
             if rotate:
                 img = img.rotate(180, expand=True)
             
-            # Cache the image
             image_cache[cache_key] = img.copy()
             print(f"Cached image: {cache_key}, size: {img.size}")
             return img
         else:
             print(f"Failed to download: status {response.status_code}")
+            if 'card-back' in url:
+                print("Using generated card back as fallback")
+                img = create_fallback_card_back()
+                if rotate:
+                    img = img.rotate(180, expand=True)
+                image_cache[cache_key] = img.copy()
+                return img
             return None
     except Exception as e:
         print(f"Error downloading {url}: {e}")
@@ -360,7 +385,6 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
         
         print(f"Creating composite for {len(cards)} cards, revealed: {revealed_indices}")
         
-        # Download and process each card
         for i, card_name in enumerate(cards):
             if i in revealed_indices:
                 url = get_card_image_url(card_name)
@@ -382,15 +406,12 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
             print("No card images loaded!")
             return None
         
-        # Calculate dimensions for composite
         card_width, card_height = card_images[0].size
-        spacing = 20  # pixels between cards
+        spacing = 20
         total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
         total_height = card_height
         
-        # Resize images if composite would be too large
-        # Discord has 8MB limit, so keep width reasonable
-        max_width = 3000  # pixels
+        max_width = 3000
         if total_width > max_width:
             scale_factor = max_width / total_width
             card_width = int(card_width * scale_factor)
@@ -398,40 +419,30 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
             spacing = int(spacing * scale_factor)
             total_width = (card_width * len(card_images)) + (spacing * (len(card_images) - 1))
             total_height = card_height
-            
-            # Resize all card images
             card_images = [img.resize((card_width, card_height), Image.Resampling.LANCZOS) for img in card_images]
             print(f"Resized cards to fit within {max_width}px width")
         
         print(f"Creating composite: {total_width}x{total_height}")
         
-        # Create composite image
         composite = Image.new('RGBA', (total_width, total_height), (0, 0, 0, 0))
         
-        # Paste each card
         x_offset = 0
         for idx, img in enumerate(card_images):
             composite.paste(img, (x_offset, 0))
             x_offset += card_width + spacing
         
-        # Convert to bytes for Discord with optimization
         img_bytes = io.BytesIO()
-        
-        # Try PNG first with compression
         composite.save(img_bytes, format='PNG', optimize=True)
         file_size = img_bytes.getbuffer().nbytes
         
-        # If still too large, convert to JPEG with quality reduction
-        if file_size > 6_500_000:  # 6.5MB threshold (lower for edit safety)
+        if file_size > 6_500_000:
             print(f"PNG too large ({file_size} bytes), converting to JPEG")
             img_bytes = io.BytesIO()
-            # Convert to RGB for JPEG (no transparency)
-            rgb_composite = Image.new('RGB', composite.size, (20, 20, 30))  # Dark background
+            rgb_composite = Image.new('RGB', composite.size, (20, 20, 30))
             rgb_composite.paste(composite, mask=composite.split()[3] if composite.mode == 'RGBA' else None)
             rgb_composite.save(img_bytes, format='JPEG', quality=75, optimize=True)
             file_size = img_bytes.getbuffer().nbytes
             
-            # If STILL too large, resize
             if file_size > 6_500_000:
                 print(f"JPEG still too large ({file_size} bytes), resizing...")
                 scale = 0.75
@@ -442,7 +453,6 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
                 file_size = img_bytes.getbuffer().nbytes
         
         img_bytes.seek(0)
-        
         print(f"Composite created successfully! Size: {file_size} bytes ({file_size / 1_000_000:.2f}MB)")
         return img_bytes
     except Exception as e:
@@ -451,9 +461,8 @@ def create_composite_image(cards, revealed_indices, reversed_cards):
         traceback.print_exc()
         return None
 
-# Card deck - using a mix of playing cards and basic tarot for demo
+# Card deck
 CARDS = {
-    # Major Arcana (simplified for demo)
     "The Fool": "New beginnings, innocence, spontaneity, free spirit",
     "The Magician": "Manifestation, resourcefulness, power, inspired action",
     "The High Priestess": "Intuition, sacred knowledge, divine feminine, subconscious",
@@ -477,9 +486,9 @@ CARDS = {
     "The World": "Completion, accomplishment, travel, fulfillment",
 }
 
-# Deck state - tracks what's been drawn
+# Deck state
 deck_state = {}
-undo_state = {}  # Tracks last drawn cards for undo functionality
+undo_state = {}
 
 def get_deck(guild_id):
     """Get or initialize deck for a guild"""
@@ -494,7 +503,6 @@ def shuffle_deck(guild_id):
     cards = get_deck_cards(guild_id)
     deck_state[guild_id] = list(cards.keys())
     random.shuffle(deck_state[guild_id])
-    # Clear undo state when shuffling
     if guild_id in undo_state:
         del undo_state[guild_id]
 
@@ -514,13 +522,10 @@ def undo_draw(guild_id):
     cards = undo_state[guild_id]
     deck = get_deck(guild_id)
     
-    # Add cards back to the front of the deck
     for card in reversed(cards):
         deck.insert(0, card)
     
-    # Clear undo state
     del undo_state[guild_id]
-    
     return cards
 
 def save_last_reading(user_id, reading_data):
@@ -531,43 +536,50 @@ def track_reading(cards, for_user_id=None):
     """Track stats for a completed reading"""
     today = datetime.utcnow().date().isoformat()
     
-    # Increment total
     reading_stats["total_readings"] += 1
     
-    # Track by date
     if today not in reading_stats["readings_by_date"]:
         reading_stats["readings_by_date"][today] = 0
     reading_stats["readings_by_date"][today] += 1
     
-    # Track by person (for_user_id is the person reading was for)
     person_key = str(for_user_id) if for_user_id else "personal"
     if person_key not in reading_stats["readings_by_person"]:
         reading_stats["readings_by_person"][person_key] = 0
     reading_stats["readings_by_person"][person_key] += 1
     
-    # Track cards drawn
     for card in cards:
         if card not in reading_stats["cards_drawn"]:
             reading_stats["cards_drawn"][card] = 0
         reading_stats["cards_drawn"][card] += 1
     
-    # Update last reading date
     reading_stats["last_reading_date"] = today
+
+def check_ethereal_draw(guild_id):
+    """
+    1–2.5% chance that a card slips through the veil and is silently consumed.
+    Returns the lost card name if triggered, or None.
+    """
+    if random.random() < random.uniform(0.01, 0.025):
+        deck = get_deck(guild_id)
+        if len(deck) > 0:
+            lost_card = deck.pop(0)
+            print(f"Ethereal Draw triggered! Lost card: {lost_card}")
+            return lost_card
+    return None
 
 class CardRevealView(View):
     def __init__(self, cards, positions, interaction, reversed_cards, question=None, reading_type="draw", for_user=None):
-        super().__init__(timeout=300)  # 5 minute timeout
-        self.cards = cards  # List of card names
-        self.reversed_cards = reversed_cards  # List of bools indicating if card is reversed
-        self.revealed = set()  # Set of revealed indices
+        super().__init__(timeout=300)
+        self.cards = cards
+        self.reversed_cards = reversed_cards
+        self.revealed = set()
         self.positions = positions or [f"Card {i+1}" for i in range(len(cards))]
         self.interaction = interaction
         self.message = None
-        self.question = question  # Optional question for /ask command
-        self.reading_type = reading_type  # Type of reading (draw, ask, spread, custom_spread, clarifier)
-        self.for_user = for_user  # User this reading is for (None = personal)
+        self.question = question
+        self.reading_type = reading_type
+        self.for_user = for_user
         
-        # Create a button for each card
         for i in range(len(cards)):
             button = Button(
                 label=f"🎴 {self.positions[i]}",
@@ -582,28 +594,19 @@ class CardRevealView(View):
             if index not in self.revealed:
                 self.revealed.add(index)
                 
-                # Update button to show it's revealed
                 for item in self.children:
                     if item.custom_id == f"card_{index}":
                         item.label = f"✨ {self.positions[index]}"
                         item.style = discord.ButtonStyle.success
                         item.disabled = True
                 
-                # Defer the response since we need time to generate image
                 await interaction.response.defer()
                 
-                # Create new composite image with this card revealed
                 composite_bytes = create_composite_image(self.cards, self.revealed, self.reversed_cards)
                 
                 if composite_bytes:
                     file = discord.File(composite_bytes, filename="cards.png")
                     
-                    # Build description showing revealed card info
-                    card_name = self.cards[index]
-                    is_reversed = self.reversed_cards[index]
-                    card_meaning = CARDS[card_name]
-                    
-                    # Create list of revealed cards
                     revealed_info = []
                     for i in sorted(self.revealed):
                         title = f"**{self.positions[i]}:** {self.cards[i]}"
@@ -616,7 +619,6 @@ class CardRevealView(View):
                     
                     description = "\n\n".join(revealed_info) if revealed_info else "Click a card to reveal!"
                     
-                    # Prepend question if this is from /ask command
                     if self.question:
                         description = f"❓ **Question:** *{self.question}*\n\n" + description
                     
@@ -628,10 +630,8 @@ class CardRevealView(View):
                     embed.set_image(url="attachment://cards.png")
                     embed.set_footer(text=f"{len(self.revealed)}/{len(self.cards)} cards revealed")
                     
-                    # Edit the original message
                     await interaction.message.edit(embed=embed, view=self, attachments=[file])
                     
-                    # Save reading for journaling when all cards are revealed
                     if len(self.revealed) == len(self.cards):
                         reading_data = {
                             "timestamp": datetime.utcnow().isoformat(),
@@ -648,8 +648,6 @@ class CardRevealView(View):
                             ]
                         }
                         save_last_reading(interaction.user.id, reading_data)
-                        
-                        # Track stats
                         track_reading(self.cards, for_user_id=self.for_user)
                 else:
                     await interaction.followup.send("Failed to load card image!", ephemeral=True)
@@ -680,7 +678,6 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Check if we have enough cards
     if len(deck) < count:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -688,30 +685,25 @@ async def draw(interaction: discord.Interaction, count: int = 1):
     else:
         reshuffle_msg = ""
     
-    # Draw cards
+    # Check for Ethereal Draw before pulling cards
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_cards = [deck.pop(0) for _ in range(count)]
-    
-    # Save for undo
     save_undo_state(guild_id, drawn_cards)
-    
-    # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(count)]
     
-    # Defer response since image generation might take a moment
     await interaction.response.defer()
     
-    # Create initial composite with all cards face down
     composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Create view with flip buttons
         view = CardRevealView(drawn_cards, [f"Card {i+1}" for i in range(count)], interaction, reversed_cards, reading_type="draw")
         
         embed = discord.Embed(
             title=f"🎴 {count} Card{'s' if count > 1 else ''} Drawn",
-            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}",
+            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}{ethereal_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -727,7 +719,6 @@ async def ask(interaction: discord.Interaction, question: str):
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Check if we have enough cards
     if len(deck) < 1:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -735,32 +726,26 @@ async def ask(interaction: discord.Interaction, question: str):
     else:
         reshuffle_msg = ""
     
-    # Draw one card
+    # Check for Ethereal Draw before pulling card
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_card = deck.pop(0)
-    
-    # Save for undo
     save_undo_state(guild_id, [drawn_card])
-    
     is_reversed = random.choice([True, False])
     
-    # Defer response since image generation might take a moment
     await interaction.response.defer()
     
-    # Create initial composite with card face down
     composite_bytes = create_composite_image([drawn_card], set(), [is_reversed])
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Truncate question if too long
         display_question = question if len(question) <= 200 else question[:197] + "..."
-        
-        # Create view with flip button
         view = CardRevealView([drawn_card], ["Answer"], interaction, [is_reversed], question=display_question)
         
         embed = discord.Embed(
             title=f"❓ Question",
-            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}",
+            description=f"*{display_question}*\n\nClick the button below to reveal your answer! ✨{reshuffle_msg}{ethereal_msg}",
             color=discord.Color.blue()
         )
         embed.set_image(url="attachment://cards.png")
@@ -781,7 +766,6 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Define spread positions
     spreads = {
         "past_present_future": ["Past", "Present", "Future"],
         "mind_body_spirit": ["Mind", "Body", "Spirit"],
@@ -791,7 +775,6 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     positions = spreads[spread_type]
     card_count = len(positions)
     
-    # Check if we have enough cards
     if len(deck) < card_count:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -799,32 +782,26 @@ async def spread(interaction: discord.Interaction, spread_type: str):
     else:
         reshuffle_msg = ""
     
-    # Draw cards for spread
+    # Check for Ethereal Draw before pulling cards
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
-    
-    # Save for undo
     save_undo_state(guild_id, drawn_cards)
-    
-    # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
     
-    # Defer response since image generation might take a moment
     await interaction.response.defer()
     
-    # Create initial composite with all cards face down
     composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Create view with labeled buttons
         view = CardRevealView(drawn_cards, positions, interaction, reversed_cards)
-        
         spread_title = spread_type.replace("_", " • ").title()
         
         embed = discord.Embed(
             title=f"🔮 {spread_title} Spread",
-            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}",
+            description=f"Your cards have been laid out. Click each position to reveal! ✨{reshuffle_msg}{ethereal_msg}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -843,10 +820,8 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Parse positions from comma-separated string
     position_list = [p.strip() for p in positions.split(",") if p.strip()]
     
-    # Validate position count
     if len(position_list) < 1:
         await interaction.response.send_message("You need at least 1 position for a spread! 🎴", ephemeral=True)
         return
@@ -857,7 +832,6 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     
     card_count = len(position_list)
     
-    # Check if we have enough cards
     if len(deck) < card_count:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -865,30 +839,25 @@ async def custom_spread(interaction: discord.Interaction, name: str, positions: 
     else:
         reshuffle_msg = ""
     
-    # Draw cards for spread
+    # Check for Ethereal Draw before pulling cards
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
-    
-    # Save for undo
     save_undo_state(guild_id, drawn_cards)
-    
-    # Randomly determine which cards are reversed (50% chance each)
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
     
-    # Defer response since image generation might take a moment
     await interaction.response.defer()
     
-    # Create initial composite with all cards face down
     composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Create view with custom position labels
         view = CardRevealView(drawn_cards, position_list, interaction, reversed_cards)
         
         embed = discord.Embed(
             title=f"🔮 {name} Spread",
-            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}\n\n**Positions:** {', '.join(position_list)}",
+            description=f"Your custom spread has been laid out. Click each position to reveal! ✨{reshuffle_msg}{ethereal_msg}\n\n**Positions:** {', '.join(position_list)}",
             color=discord.Color.purple()
         )
         embed.set_image(url="attachment://cards.png")
@@ -917,7 +886,6 @@ async def deck_info(interaction: discord.Interaction):
 @tree.command(name="card_info", description="Look up a specific card's meaning")
 @app_commands.describe(card_name="Name of the card to look up")
 async def card_info(interaction: discord.Interaction, card_name: str):
-    # Try to find the card (case-insensitive partial match)
     card_name_lower = card_name.lower()
     matches = [name for name in CARDS.keys() if card_name_lower in name.lower()]
     
@@ -929,7 +897,6 @@ async def card_info(interaction: discord.Interaction, card_name: str):
         return
     
     if len(matches) > 1:
-        # Multiple matches - show options
         match_list = "\n".join([f"• {name}" for name in matches[:10]])
         await interaction.response.send_message(
             f"🔍 Multiple cards match '{card_name}':\n{match_list}\n\nPlease be more specific!",
@@ -937,7 +904,6 @@ async def card_info(interaction: discord.Interaction, card_name: str):
         )
         return
     
-    # Single match found
     found_card = matches[0]
     card_meaning = CARDS[found_card]
     card_url = get_card_image_url(found_card)
@@ -989,7 +955,6 @@ async def undo_and_shuffle(interaction: discord.Interaction):
     cards = undo_draw(guild_id)
     card_list = ", ".join(cards)
     
-    # Shuffle the deck (which now includes the returned cards)
     deck = get_deck(guild_id)
     random.shuffle(deck)
     
@@ -1007,7 +972,6 @@ async def pull_clarifier(interaction: discord.Interaction):
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Check if we have enough cards
     if len(deck) < 1:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -1015,11 +979,12 @@ async def pull_clarifier(interaction: discord.Interaction):
     else:
         reshuffle_msg = ""
     
-    # Draw one clarifier card
+    # Check for Ethereal Draw before pulling card
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_card = deck.pop(0)
     
-    # Clarifiers are added to existing undo state, not replacing it
-    # This way you can undo the whole reading including clarifier
     if can_undo(guild_id):
         undo_state[guild_id].append(drawn_card)
     else:
@@ -1027,21 +992,17 @@ async def pull_clarifier(interaction: discord.Interaction):
     
     is_reversed = random.choice([True, False])
     
-    # Defer response since image generation might take a moment
     await interaction.response.defer()
     
-    # Create initial composite with card face down
     composite_bytes = create_composite_image([drawn_card], set(), [is_reversed])
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Create view with flip button
         view = CardRevealView([drawn_card], ["Clarifier"], interaction, [is_reversed])
         
         embed = discord.Embed(
             title=f"🔍 Clarifier Card",
-            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}",
+            description=f"An additional card drawn to provide clarity or deeper insight.{reshuffle_msg}{ethereal_msg}",
             color=discord.Color.gold()
         )
         embed.set_image(url="attachment://cards.png")
@@ -1067,19 +1028,17 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Determine card count and positions based on reading type
     if reading_type == "draw":
-        card_count = 3  # Default to 3 cards for "draw"
+        card_count = 3
         positions = [f"Card {i+1}" for i in range(card_count)]
-        title = f"🎴 Reading for {user.mention}"
+        title = f"🎴 Reading for {user.display_name}"
         color = discord.Color.blue()
     elif reading_type == "ask":
         card_count = 1
         positions = ["Answer"]
-        title = f"❓ Question Reading for {user.mention}"
+        title = f"❓ Question Reading for {user.display_name}"
         color = discord.Color.blue()
     else:
-        # It's a spread
         spreads = {
             "past_present_future": ["Past", "Present", "Future"],
             "mind_body_spirit": ["Mind", "Body", "Spirit"],
@@ -1088,10 +1047,9 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
         positions = spreads[reading_type]
         card_count = len(positions)
         spread_title = reading_type.replace("_", " • ").title()
-        title = f"🔮 {spread_title} Spread for {user.mention}"
+        title = f"🔮 {spread_title} Spread for {user.display_name}"
         color = discord.Color.purple()
     
-    # Check if we have enough cards
     if len(deck) < card_count:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
@@ -1099,36 +1057,37 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
     else:
         reshuffle_msg = ""
     
-    # Draw cards
+    # Check for Ethereal Draw before pulling cards
+    ethereal_card = check_ethereal_draw(guild_id)
+    ethereal_msg = f"\n\n🌫️ *An Ethereal Draw — **{ethereal_card}** slipped through the veil, consumed before it could be read.*" if ethereal_card else ""
+    
     drawn_cards = [deck.pop(0) for _ in range(card_count)]
-    
-    # Save for undo
     save_undo_state(guild_id, drawn_cards)
-    
-    # Randomly determine which cards are reversed
     reversed_cards = [random.choice([True, False]) for _ in range(card_count)]
     
-    # Defer response
     await interaction.response.defer()
     
-    # Create initial composite with all cards face down
     composite_bytes = create_composite_image(drawn_cards, set(), reversed_cards)
     
     if composite_bytes:
         file = discord.File(composite_bytes, filename="cards.png")
-        
-        # Create view with flip buttons
         view = CardRevealView(drawn_cards, positions, interaction, reversed_cards, reading_type=reading_type, for_user=user.id)
         
         embed = discord.Embed(
             title=title,
-            description=f"Click the buttons below to reveal each card! ✨{reshuffle_msg}",
+            description=f"{user.mention} — Click the buttons below to reveal each card! ✨{reshuffle_msg}{ethereal_msg}",
             color=color
         )
         embed.set_image(url="attachment://cards.png")
         embed.set_footer(text=f"Reading by {interaction.user.display_name} • Cards remaining: {len(deck)}")
         
-        await interaction.followup.send(embed=embed, file=file, view=view)
+        await interaction.followup.send(
+            content=f"🔮 Reading for {user.mention}",
+            embed=embed,
+            file=file,
+            view=view,
+            allowed_mentions=discord.AllowedMentions(users=True)
+        )
     else:
         await interaction.followup.send("Failed to create card display. Please try again!", ephemeral=True)
 
@@ -1140,7 +1099,6 @@ async def reading_for(interaction: discord.Interaction, user: discord.User, read
 async def journal(interaction: discord.Interaction, name: str, notes: str):
     user_id = interaction.user.id
     
-    # Check if there's a recent reading to save
     if user_id not in last_readings:
         await interaction.response.send_message(
             "❌ No recent reading to journal! Complete a reading first (cards must be fully revealed).",
@@ -1150,10 +1108,8 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
     
     await interaction.response.defer(ephemeral=True)
     
-    # Get journals from GitHub
     journals, sha = get_journals_from_github()
     
-    # Check if name already exists for this user
     user_id_str = str(user_id)
     existing = next((j for j in journals if j.get("user_id") == user_id_str and j.get("name").lower() == name.lower()), None)
     
@@ -1164,7 +1120,6 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
         )
         return
     
-    # Create journal entry
     reading = last_readings[user_id]
     entry = {
         "user_id": user_id_str,
@@ -1172,22 +1127,19 @@ async def journal(interaction: discord.Interaction, name: str, notes: str):
         "timestamp": reading["timestamp"],
         "reading_type": reading["reading_type"],
         "question": reading["question"],
-        "for_user": reading.get("for_user"),  # User ID this reading was for
+        "for_user": reading.get("for_user"),
         "cards": reading["cards"],
         "notes": notes
     }
     
     journals.append(entry)
     
-    # Save to GitHub
     if save_journals_to_github(journals, sha):
-        # Format cards for display
         cards_display = "\n".join([
             f"• **{card['position']}:** {card['name']}{' (Reversed)' if card['reversed'] else ''}"
             for card in reading["cards"]
         ])
         
-        # Add "Reading for" if applicable
         for_user_text = ""
         if reading.get("for_user"):
             try:
@@ -1217,10 +1169,7 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
     
     await interaction.response.defer(ephemeral=True)
     
-    # Get journals from GitHub
     journals, _ = get_journals_from_github()
-    
-    # Filter to this user's entries
     user_journals = [j for j in journals if j.get("user_id") == user_id]
     
     if not user_journals:
@@ -1231,7 +1180,6 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
         return
     
     if name:
-        # View specific entry by name
         entry = next((j for j in user_journals if j.get("name").lower() == name.lower()), None)
         if not entry:
             await interaction.followup.send(
@@ -1257,11 +1205,9 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
     else:
-        # List all entries with pagination
         sorted_entries = sorted(user_journals, key=lambda x: x['timestamp'], reverse=True)
         
         if len(sorted_entries) <= 10:
-            # No pagination needed
             entries_list = "\n".join([
                 f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
                 for j in sorted_entries
@@ -1275,7 +1221,6 @@ async def journal_view(interaction: discord.Interaction, name: str = None):
             
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
-            # Use pagination
             page_entries = sorted_entries[:10]
             entries_list = "\n".join([
                 f"• **{j['name']}** - {datetime.fromisoformat(j['timestamp']).strftime('%b %d, %Y')}"
@@ -1299,10 +1244,7 @@ async def journal_delete(interaction: discord.Interaction, name: str):
     
     await interaction.response.defer(ephemeral=True)
     
-    # Get journals from GitHub
     journals, sha = get_journals_from_github()
-    
-    # Find the entry
     entry = next((j for j in journals if j.get("name").lower() == name.lower() and j.get("user_id") == user_id), None)
     
     if not entry:
@@ -1312,10 +1254,8 @@ async def journal_delete(interaction: discord.Interaction, name: str):
         )
         return
     
-    # Remove it
     journals = [j for j in journals if not (j.get("name").lower() == name.lower() and j.get("user_id") == user_id)]
     
-    # Save to GitHub
     if save_journals_to_github(journals, sha):
         await interaction.followup.send(
             f"🗑️ Entry '{name}' deleted from your journal.",
@@ -1359,7 +1299,6 @@ async def deck_list(interaction: discord.Interaction):
 async def deck_switch(interaction: discord.Interaction, deck_name: str):
     guild_id = interaction.guild_id or interaction.user.id
     
-    # Find deck (case-insensitive)
     deck_match = None
     for name in loaded_decks.keys():
         if name.lower() == deck_name.lower():
@@ -1374,12 +1313,8 @@ async def deck_switch(interaction: discord.Interaction, deck_name: str):
         )
         return
     
-    # Switch deck
     active_decks[guild_id] = deck_match
-    
-    # Reset the deck state with new cards
     shuffle_deck(guild_id)
-    
     card_count = len(loaded_decks[deck_match]["cards"])
     
     embed = discord.Embed(
@@ -1396,20 +1331,16 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
     guild_id = interaction.guild_id or interaction.user.id
     deck = get_deck(guild_id)
     
-    # Check if we have cards
     if len(deck) < 1:
         shuffle_deck(guild_id)
         deck = get_deck(guild_id)
     
-    # Draw one card
     drawn_card = deck.pop(0)
     is_reversed = random.choice([True, False])
     
-    # Get card info
     card_meaning = CARDS[drawn_card]
     card_url = get_card_image_url(drawn_card)
     
-    # Show card privately to the reader
     title = f"{drawn_card}{' (Reversed)' if is_reversed else ''}"
     if is_reversed:
         meaning_text = f"🔄 {card_meaning}\n\n*When reversed, this card's energy is blocked, internalized, or expressing in shadow form.*"
@@ -1425,7 +1356,6 @@ async def daily_card(interaction: discord.Interaction, channel: discord.TextChan
     embed.set_footer(text="Only you can see this message")
     
     view = DailyCardView(drawn_card, is_reversed, channel)
-    
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @tree.command(name="request_reading", description="Request a reading from the reader")
@@ -1439,22 +1369,17 @@ async def request_reading(interaction: discord.Interaction, topic: str = None):
         )
         return
     
-    # Find users with "Wasteland Oracle" role
     reader_role = discord.utils.get(guild.roles, name="Wasteland Oracle")
     
     if reader_role:
         readers = [member for member in guild.members if reader_role in member.roles]
         if readers:
-            # Mention actual users
             reader_mentions = " ".join([reader.mention for reader in readers])
         else:
-            # Mention the role itself if no members have it yet
             reader_mentions = reader_role.mention
     else:
-        # Role doesn't exist, just use text
         reader_mentions = "**Wasteland Oracle**"
     
-    # Create request message
     topic_text = f"\n**Topic:** {topic}" if topic else ""
     
     embed = discord.Embed(
@@ -1464,7 +1389,6 @@ async def request_reading(interaction: discord.Interaction, topic: str = None):
     )
     embed.set_footer(text=f"Requested by {interaction.user.display_name}")
     
-    # Need to send with allowed_mentions to actually ping the role
     await interaction.response.send_message(
         embed=embed,
         allowed_mentions=discord.AllowedMentions(roles=True, users=True)
@@ -1483,7 +1407,6 @@ async def reading_stats_command(interaction: discord.Interaction):
         )
         return
     
-    # Calculate streak
     today = datetime.utcnow().date()
     streak = 0
     check_date = today
@@ -1491,7 +1414,6 @@ async def reading_stats_command(interaction: discord.Interaction):
         streak += 1
         check_date = check_date.replace(day=check_date.day - 1) if check_date.day > 1 else check_date.replace(month=check_date.month - 1, day=28)
     
-    # Most active day of week
     day_counts = {}
     for date_str, count in stats["readings_by_date"].items():
         date_obj = datetime.fromisoformat(date_str)
@@ -1502,7 +1424,6 @@ async def reading_stats_command(interaction: discord.Interaction):
     
     most_active_day = max(day_counts.items(), key=lambda x: x[1]) if day_counts else ("N/A", 0)
     
-    # Readings per person
     person_list = []
     for person_id, count in sorted(stats["readings_by_person"].items(), key=lambda x: x[1], reverse=True)[:5]:
         if person_id == "personal":
@@ -1516,15 +1437,13 @@ async def reading_stats_command(interaction: discord.Interaction):
     
     person_text = "\n".join(person_list) if person_list else "No readings yet"
     
-    # Most and least drawn cards
     if stats["cards_drawn"]:
         most_drawn = max(stats["cards_drawn"].items(), key=lambda x: x[1])
         least_drawn = min(stats["cards_drawn"].items(), key=lambda x: x[1])
         
-        # Find cards never drawn
         all_cards = set(CARDS.keys())
-        drawn_cards = set(stats["cards_drawn"].keys())
-        never_drawn = all_cards - drawn_cards
+        drawn_cards_set = set(stats["cards_drawn"].keys())
+        never_drawn = all_cards - drawn_cards_set
         
         if never_drawn:
             least_drawn = (list(never_drawn)[0], 0)
@@ -1615,20 +1534,27 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     
-    embed.set_footer(text="✨ The cards are always listening.")
+    embed.add_field(
+        name="🌫️ Ethereal Draws",
+        value=(
+            "Occasionally, a card may slip through the veil during a reading — consumed by unseen forces before it can be read. "
+            "This is known as an **Ethereal Draw**. The card is lost from the deck until the next shuffle. "
+            "Some things are simply not meant to be seen."
+        ),
+        inline=False
+    )
     
+    embed.set_footer(text="✨ The cards are always listening.")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.event
 async def on_ready():
-    # Load decks from GitHub
     load_decks_from_github()
-    
     await tree.sync()
     print(f'✅ Logged in as {client.user}')
     print(f'🔮 Oracle card bot ready!')
     print(f'📦 Loaded {len(loaded_decks)} deck(s): {", ".join(loaded_decks.keys())}')
-    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /deck_list, /deck_switch, /card_info, /journal, /journal_view, /journal_delete, /reading_stats, /daily_card, /request_reading')
+    print(f'📝 Commands: /shuffle, /draw, /ask, /spread, /custom_spread, /reading_for, /pull_clarifier, /undo, /undo_and_shuffle, /deck_info, /deck_list, /deck_switch, /card_info, /journal, /journal_view, /journal_delete, /reading_stats, /daily_card, /request_reading, /help')
 
 # Run the bot
 client.run(os.getenv('DISCORD_TOKEN'))
