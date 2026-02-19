@@ -24,5 +24,46 @@
       "Judgement": "Reflection, reckoning, inner calling, absolution",
       "The World": "Completion, accomplishment, travel, fulfillment"
     }
+  },
+  "Nyxi's Sacred Garden": {
+    "image_folder": "nyxi",
+    "cards": {
+      "The Seed": "Potential • Beginning • Growth",
+      "The Body": "Embodiment • Sensation • Presence",
+      "The Longing": "Desire • Seeking • Yearning",
+      "The Mirror": "Reflection • Identity • Awareness",
+      "The Knot": "Conflict • Entanglement • Tension",
+      "The Inner Flame": "Passion • Vitality • Intuition",
+      "The Wound": "Pain • Vulnerability • Healing",
+      "The Breath": "Stillness • Grounding • Life",
+      "The Becoming": "Transformation • Evolution • Change",
+      "The Forest": "Mystery • Exploration • Trust",
+      "The River": "Flow • Release • Surrender",
+      "The Moon": "Cycles • Intuition • Emotion",
+      "The Stone": "Stability • Strength • Foundation",
+      "The Garden": "Nurturing • Care • Abundance",
+      "The Storm": "Upheaval • Cleansing • Power",
+      "The Deer": "Gentleness • Sensitivity • Grace",
+      "The Owl": "Wisdom • Insight • Perception",
+      "The Roots": "Heritage • Connection • Grounding",
+      "The Mother": "Compassion • Protection • Love",
+      "The Candle": "Hope • Guidance • Faith",
+      "The Cathedral": "Reverence • Awe • Sanctuary",
+      "The Saint": "Virtue • Devotion • Guidance",
+      "The Confession": "Honesty • Release • Truth",
+      "The Communion": "Unity • Sharing • Belonging",
+      "The Divine Within": "Sacredness • Unity • Essence",
+      "The Veil": "Mystery • Intuition • Revelation",
+      "The Thread": "Fate • Connection • Continuity",
+      "The Cave": "Descent • Shadow • Reflection",
+      "The Crossroads": "Choice • Direction • Decision",
+      "The Annunciation": "Calling • Awakening • Beginning",
+      "The Resurrection": "Renewal • Rebirth • Hope",
+      "The Shadow": "Fear • Denial • Unconscious",
+      "The Silence": "Stillness • Waiting • Presence",
+      "The Pilgrimage": "Journey • Seeking • Faith",
+      "The Surrender": "Letting go • Trust • Acceptance",
+      "The Fire": "Transformation • Purification • Passion"
+    }
   }
 }
